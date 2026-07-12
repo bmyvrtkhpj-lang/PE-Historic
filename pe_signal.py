@@ -73,7 +73,6 @@ def generate_signals(df: pd.DataFrame,
 
     return out
 
-
 def generate_ablation_signals(df: pd.DataFrame,
                                cheap_pctile: float = 0.20,
                                expensive_pctile: float = 0.80,
