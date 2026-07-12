@@ -209,6 +209,7 @@ def main():
     holding_periods_text = st.text_input("Forward holding periods (trading days, comma-separated)", value="21,63,126,252")
     holding_periods = tuple(int(x.strip()) for x in holding_periods_text.split(",") if x.strip())
 
+    # Yahan par volume_window=20 add kiya gaya hai
     params = dict(
         cheap_pctile=cheap_pctile, expensive_pctile=expensive_pctile,
         volume_z_threshold=volume_z_threshold, require_momentum_confirmation=require_momentum_confirmation,
@@ -216,6 +217,7 @@ def main():
         momentum_window=momentum_window, rsi_window=rsi_window,
         dma_short=dma_short, dma_long=dma_long,
         price_start=price_start, holding_periods=holding_periods,
+        volume_window=20  # <-- Ye missing tha!
     )
 
     if st.button("Run Backtest", type="primary", use_container_width=True):
