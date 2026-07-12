@@ -129,18 +129,23 @@ def extract_annual_fundamentals(xlsx_path):
 def build_step_function_pe(annual_df, daily_price, filing_lag_days=60):
     """
     Combine annual EPS (step function, becomes "known to the market"
-    `filing_lag_days` after fiscal year end) with a daily price series to
+    filing_lag_days after fiscal year end) with a daily price series to
     build a continuous daily PE series across the full annual history.
-
-    daily_price: pandas Series indexed by date (DatetimeIndex), values = close price.
-    Returns a DataFrame indexed by date with columns: price, annual_eps, pe.
     """
     eps_df = annual_df.copy()
-    eps_df["effective_date"] = eps_df["fiscal_year_end"] + pd.Timedelta(days=filing_lag_days)
+    
+    # Calculate effective date
+    eps_df["effective_date"] = pd.to_datetime(eps_df["fiscal_year_end"]) + pd.Timedelta(days=filing_lag_days)
+    
+    # FORCE exact same datetime type (timezone-naive, nanosecond resolution) to prevent MergeError
+    eps_df["effective_date"] = pd.to_datetime(eps_df["effective_date"]).dt.tz_localize(None).astype("datetime64[ns]")
     eps_df = eps_df.sort_values("effective_date")
 
     price_df = daily_price.rename("price").to_frame().reset_index()
     price_df.columns = ["date", "price"]
+    
+    # FORCE exact same datetime type on the price side too
+    price_df["date"] = pd.to_datetime(price_df["date"]).dt.tz_localize(None).astype("datetime64[ns]")
 
     merged = pd.merge_asof(
         price_df.sort_values("date"),
@@ -150,7 +155,6 @@ def build_step_function_pe(annual_df, daily_price, filing_lag_days=60):
     )
     merged["pe"] = merged["price"] / merged["annual_eps"]
     return merged.set_index("date")
-
 
 def apply_corporate_action_exclusions(pe_df, exclusions):
     """
