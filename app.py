@@ -24,6 +24,8 @@ where the 2023 merger looked unremarkable in the EPS series itself).
 
 import pandas as pd
 import streamlit as st
+import requests
+import io
 
 try:
     import plotly.graph_objects as go
@@ -55,6 +57,32 @@ def parse_exclusions(text):
             st.warning(f"Could not parse exclusion window '{chunk}' -- expected format YYYY-MM-DD:YYYY-MM-DD, skipping it.")
     return windows
 
+@st.cache_data(ttl=86400, show_spinner=False) # 24 hours cache
+def get_all_nse_stocks():
+    """Fetches the live list of all NSE equity stocks dynamically."""
+    try:
+        # NSE official list link
+        url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=10)
+        df = pd.read_csv(io.StringIO(res.text))
+        
+        # Map create karo: "Company Name (SYMBOL)" -> "SYMBOL.NS"
+        mapping = {}
+        for _, row in df.iterrows():
+            display_name = f"{row['NAME OF COMPANY']} ({row['SYMBOL']})"
+            mapping[display_name] = f"{row['SYMBOL']}.NS"
+            
+        return mapping
+    except Exception as e:
+        # Agar NSE ki website error de, toh ye default backup chalega
+        return {
+            "HDFC Bank Limited (HDFCBANK)": "HDFCBANK.NS",
+            "Reliance Industries Limited (RELIANCE)": "RELIANCE.NS",
+            "Tata Consultancy Services Limited (TCS)": "TCS.NS"
+        }
 
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def cached_price_volume(ticker, start, end):
