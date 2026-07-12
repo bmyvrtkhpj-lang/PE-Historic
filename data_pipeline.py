@@ -168,16 +168,22 @@ def apply_corporate_action_exclusions(pe_df, exclusions):
 def fetch_price_volume(ticker, start, end):
     """
     Fetches daily Close price + Volume via yfinance.
-    NOT runnable in this sandbox (no internet access to Yahoo Finance here) --
-    run this in your own Streamlit/local environment, same as your CAPM dashboard.
+    Using Ticker.history() avoids the MultiIndex column format issues.
     """
     import yfinance as yf
-    raw = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False, threads=False)
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
+    
+    # Use Ticker.history to avoid MultiIndex structure issues
+    stock = yf.Ticker(ticker)
+    raw = stock.history(start=start, end=end)
+    
+    # Return empty DataFrame if no data is found
+    if raw.empty:
+        return pd.DataFrame(columns=["price", "volume"])
+        
     out = pd.DataFrame({
         "price": pd.to_numeric(raw["Close"], errors="coerce"),
         "volume": pd.to_numeric(raw["Volume"], errors="coerce"),
     }).dropna()
+    
     out.index = pd.to_datetime(out.index).tz_localize(None)
     return out
