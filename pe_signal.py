@@ -38,38 +38,40 @@ def pe_percentile_rank(pe: pd.Series, min_periods: int = 252) -> pd.Series:
 
 
 def generate_signals(df: pd.DataFrame,
-                      cheap_pctile: float = 0.20,
-                      expensive_pctile: float = 0.80,
-                      volume_z_threshold: float = 1.5,
-                      require_momentum_confirmation: bool = True) -> pd.DataFrame:
-    """
-    Updated version with Regime Filter to avoid catching falling knives.
-    """
-    out = df.copy()
-    
-    # 1. Momentum Check
-    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else True
-    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else True
-    
-    # 2. Regime Filter (Bullish trend check)
-    # Price >= 200 DMA regime is marked as 'Bull' in technical_indicators.py
-    bullish_regime = (out["regime"] == "Bull")
-    
-    # 3. Signals with Regime confirmation
-    out["heavy_buying"] = (
-        (out["pe_percentile"] <= cheap_pctile)
-        & (out["volume_zscore"] >= volume_z_threshold)
-        & momentum_buy_ok
-        & bullish_regime  # Sirf Bullish trend mein hi Buy signal
-    ).fillna(False)
+                      cheap_pctile: float = 0.20,
+                      expensive_pctile: float = 0.80,
+                      volume_z_threshold: float = 1.5,
+                      require_momentum_confirmation: bool = True) -> pd.DataFrame:
+    """
+    df must already contain: 'pe_percentile', 'volume_zscore', 'momentum'
+    (from technical_indicators.add_all_technical_indicators + pe_percentile_rank).
 
-    out["heavy_selling"] = (
-        (out["pe_percentile"] >= expensive_pctile)
-        & (out["volume_zscore"] >= volume_z_threshold)
-        & momentum_sell_ok
-    ).fillna(False)
+    heavy_buying  = cheap valuation zone + volume spike + (optional) positive momentum
+    heavy_selling = expensive valuation zone + volume spike + (optional) negative momentum
 
-    return out
+    These thresholds (0.20 / 0.80 / 1.5) are starting defaults, not
+    validated constants -- they should be tuned/checked against your actual
+    Nifty 100 sample once real data is in, ideally on an initial in-sample
+    period, then confirmed on a held-out later period rather than tuned on
+    the full history (to keep the backtest honest).
+    """
+    out = df.copy()
+    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else True
+    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else True
+
+    out["heavy_buying"] = (
+        (out["pe_percentile"] <= cheap_pctile)
+        & (out["volume_zscore"] >= volume_z_threshold)
+        & momentum_buy_ok
+    ).fillna(False)
+
+    out["heavy_selling"] = (
+        (out["pe_percentile"] >= expensive_pctile)
+        & (out["volume_zscore"] >= volume_z_threshold)
+        & momentum_sell_ok
+    ).fillna(False)
+
+    return out
 
 
 def generate_ablation_signals(df: pd.DataFrame,
