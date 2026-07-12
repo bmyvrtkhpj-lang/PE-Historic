@@ -179,7 +179,7 @@ def main():
                 
                 # Background mein code automatically usko '.NS' wala ticker bana lega
                 ticker = TICKER_MAPPING.get(company_name) if company_name else ""
-                )
+                
             with c2:
                 xlsx_file = st.file_uploader(f"Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
             exclusions_text = st.text_input(
