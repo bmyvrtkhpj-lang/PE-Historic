@@ -18,24 +18,33 @@ data available up to and including that day.
 import numpy as np
 import pandas as pd
 
+
 def pe_percentile_rank(pe: pd.Series, min_periods: int = 252) -> pd.Series:
     def _pctrank(x):
         return x.rank(pct=True).iloc[-1]
     return pe.expanding(min_periods=min_periods).apply(_pctrank, raw=False)
 
-def generate_signals(df, cheap_pctile, expensive_pctile, volume_z_threshold, require_momentum_confirmation):
+
+def generate_signals(df, cheap_pctile, expensive_pctile, volume_z_threshold, require_momentum_confirmation, momentum_threshold=0.0):
+    """
+    momentum_threshold: minimum ABSOLUTE momentum required to count as
+    confirmation (e.g. 0.02 = momentum must be beyond +/-2%, not just any
+    tiny positive/negative wiggle). Default 0.0 preserves the old
+    "any sign counts" behaviour, for backward compatibility.
+    """
     out = df.copy()
-    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else True
-    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else True
-    
+    momentum_buy_ok = (out["momentum"] > momentum_threshold) if require_momentum_confirmation else True
+    momentum_sell_ok = (out["momentum"] < -momentum_threshold) if require_momentum_confirmation else True
+
     out["heavy_buying"] = ((out["pe_percentile"] <= cheap_pctile) & (out["volume_zscore"] >= volume_z_threshold) & momentum_buy_ok).fillna(False)
     out["heavy_selling"] = ((out["pe_percentile"] >= expensive_pctile) & (out["volume_zscore"] >= volume_z_threshold) & momentum_sell_ok).fillna(False)
     return out
 
-def generate_ablation_signals(df, cheap_pctile, expensive_pctile, volume_z_threshold, require_momentum_confirmation):
+
+def generate_ablation_signals(df, cheap_pctile, expensive_pctile, volume_z_threshold, require_momentum_confirmation, momentum_threshold=0.0):
     out = df.copy()
-    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else True
-    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else True
+    momentum_buy_ok = (out["momentum"] > momentum_threshold) if require_momentum_confirmation else True
+    momentum_sell_ok = (out["momentum"] < -momentum_threshold) if require_momentum_confirmation else True
     out["buy_pe_only"] = (out["pe_percentile"] <= cheap_pctile).fillna(False)
     out["buy_technical_only"] = ((out["volume_zscore"] >= volume_z_threshold) & momentum_buy_ok).fillna(False)
     out["buy_combined"] = (out["buy_pe_only"] & out["buy_technical_only"])
