@@ -29,8 +29,14 @@ st.markdown("""
     /* Global Monospace & Pure Black Background */
     @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
     
-    * {
+    /* Apply monospace everywhere */
+    p, div, h1, h2, h3, h4, h5, h6, label, input, button, li {
         font-family: 'Space Mono', 'Consolas', 'Courier New', monospace !important;
+    }
+    
+    /* FIX: Protect Streamlit's internal icons from becoming text */
+    span.material-symbols-rounded, span.material-icons, .stIcon {
+        font-family: 'Material Symbols Rounded' !important;
     }
     
     .stApp {
@@ -57,7 +63,7 @@ st.markdown("""
         border: 1px solid #333333;
         border-radius: 0px;
         padding: 10px 15px;
-        border-top: 2px solid #FFB000; /* Bloomberg Amber Header Accent */
+        border-top: 2px solid #FFB000;
     }
     
     div[data-testid="stMetricValue"] > div {
@@ -81,7 +87,7 @@ st.markdown("""
     /* The RUN button - Bloomberg style 'Execute' key */
     div.stButton > button[kind="primary"] {
         background-color: #000000;
-        color: #00FF00; /* Terminal Green */
+        color: #00FF00;
         border: 1px solid #00FF00;
         border-radius: 0px;
         font-weight: 700;
