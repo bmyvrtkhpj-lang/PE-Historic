@@ -34,8 +34,8 @@ except ImportError:
 
 from data_pipeline import extract_annual_fundamentals, build_step_function_pe, apply_corporate_action_exclusions, fetch_price_volume
 from technical_indicators import add_all_technical_indicators
-from pe_signal import pe_percentile_rank, generate_signals
-from backtest import run_backtest
+from pe_signal import pe_percentile_rank, generate_signals, generate_ablation_signals
+from backtest import run_backtest, run_ablation_backtest
 
 
 st.set_page_config(page_title="PE + Technical Signal Framework", layout="wide")
@@ -57,32 +57,38 @@ def parse_exclusions(text):
             st.warning(f"Could not parse exclusion window '{chunk}' -- expected format YYYY-MM-DD:YYYY-MM-DD, skipping it.")
     return windows
 
-@st.cache_data(ttl=86400, show_spinner=False) # 24 hours cache
+
+@st.cache_data(ttl=86400, show_spinner=False)  # 24 hours cache
 def get_all_nse_stocks():
-    """Fetches the live list of all NSE equity stocks dynamically."""
+    """
+    Fetches the live list of all NSE equity stocks dynamically.
+    NOTE: not verified live from this environment (no internet access here) --
+    test this a few times from the deployed app to confirm NSE's archive
+    endpoint reliably returns the full list and doesn't get blocked/rate-limited
+    for scripted requests. The fallback dict below only has 3 stocks, so if this
+    fetch silently fails often, the dropdown will be far less useful than intended.
+    """
     try:
-        # NSE official list link
         url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         res = requests.get(url, headers=headers, timeout=10)
         df = pd.read_csv(io.StringIO(res.text))
-        
-        # Map create karo: "Company Name (SYMBOL)" -> "SYMBOL.NS"
+
         mapping = {}
         for _, row in df.iterrows():
             display_name = f"{row['NAME OF COMPANY']} ({row['SYMBOL']})"
             mapping[display_name] = f"{row['SYMBOL']}.NS"
-            
+
         return mapping
-    except Exception as e:
-        # Agar NSE ki website error de, toh ye default backup chalega
+    except Exception:
         return {
             "HDFC Bank Limited (HDFCBANK)": "HDFCBANK.NS",
             "Reliance Industries Limited (RELIANCE)": "RELIANCE.NS",
             "Tata Consultancy Services Limited (TCS)": "TCS.NS"
         }
+
 
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def cached_price_volume(ticker, start, end):
@@ -119,9 +125,17 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         volume_z_threshold=params["volume_z_threshold"],
         require_momentum_confirmation=params["require_momentum_confirmation"],
     )
+    merged = generate_ablation_signals(
+        merged,
+        cheap_pctile=params["cheap_pctile"],
+        expensive_pctile=params["expensive_pctile"],
+        volume_z_threshold=params["volume_z_threshold"],
+        require_momentum_confirmation=params["require_momentum_confirmation"],
+    )
 
     results = run_backtest(merged, holding_periods=params["holding_periods"])
-    return {"annual": annual, "merged": merged, "results": results}, None
+    ablation_results = run_ablation_backtest(merged, holding_periods=params["holding_periods"])
+    return {"annual": annual, "merged": merged, "results": results, "ablation_results": ablation_results}, None
 
 
 def render_stock_chart(ticker, merged):
@@ -149,6 +163,39 @@ def render_stock_chart(ticker, merged):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_ablation_table(ablation_results, side):
+    """side = 'buy' or 'sell'. Shows the 3 variants stacked so PE's marginal
+    contribution beyond the technical trigger alone is visible at a glance."""
+    labels = {
+        f"{side}_pe_only": "PE zone ONLY (no technical confirmation)",
+        f"{side}_technical_only": "Technical trigger ONLY (no PE condition)",
+        f"{side}_combined": "PE + Technical COMBINED (the actual signal)",
+    }
+    rows = []
+    for key, label in labels.items():
+        df = ablation_results.get(key)
+        if df is None or df.empty:
+            continue
+        row = df[df["holding_period"] == "fwd_ret_63d"]
+        if row.empty:
+            continue
+        row = row.iloc[0]
+        rows.append({
+            "Variant": label,
+            "n_signals": row["n_signals"],
+            "avg_return_63d": row["avg_signal_return"],
+            "win_rate": row["win_rate"],
+            "p_value": row["p_value"],
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "If 'COMBINED' isn't meaningfully better than 'Technical ONLY', the PE "
+            "condition isn't adding much beyond the technical trigger alone -- worth "
+            "knowing before claiming the valuation component is what's driving results."
+        )
+
+
 def main():
     st.title("PE + Technical Entry/Exit Signal Framework")
     st.caption(
@@ -165,23 +212,17 @@ def main():
         with st.expander(f"Stock {i + 1}", expanded=(i == 0)):
             c1, c2 = st.columns(2)
             with c1:
-                # 2000+ Indian stocks ka data load karo
                 TICKER_MAPPING = get_all_nse_stocks()
-                
-                # Dropdown mein ab kisi bhi company ka naam search kar sakte ho
                 company_name = st.selectbox(
-                    f"Search Indian Stock", 
+                    "Search Indian Stock",
                     options=list(TICKER_MAPPING.keys()),
                     index=None,
                     placeholder="Type company name (e.g. Zomato, Tata Motors)",
                     key=f"name_{i}"
                 )
-                
-                # Background mein code automatically usko '.NS' wala ticker bana lega
                 ticker = TICKER_MAPPING.get(company_name) if company_name else ""
-                
             with c2:
-                xlsx_file = st.file_uploader(f"Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
+                xlsx_file = st.file_uploader("Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
             exclusions_text = st.text_input(
                 "Corporate action exclusion windows (optional) -- format YYYY-MM-DD:YYYY-MM-DD, comma-separated for multiple",
                 key=f"exclusions_{i}",
@@ -197,6 +238,7 @@ def main():
         filing_lag_days = st.number_input("Annual filing lag (days)", min_value=0, max_value=180, value=60, step=5)
     with c2:
         volume_z_threshold = st.slider("Volume z-score threshold ('heavy')", 0.5, 4.0, 1.5, 0.1)
+        volume_window = st.number_input("Volume rolling window (days, for z-score)", min_value=5, max_value=120, value=20, step=5)
         require_momentum_confirmation = st.checkbox("Require momentum confirmation", value=True)
         pe_min_periods = st.number_input("Min days before PE percentile starts", min_value=30, max_value=1000, value=252, step=10)
     with c3:
@@ -209,15 +251,14 @@ def main():
     holding_periods_text = st.text_input("Forward holding periods (trading days, comma-separated)", value="21,63,126,252")
     holding_periods = tuple(int(x.strip()) for x in holding_periods_text.split(",") if x.strip())
 
-    # Yahan par volume_window=20 add kiya gaya hai
     params = dict(
         cheap_pctile=cheap_pctile, expensive_pctile=expensive_pctile,
-        volume_z_threshold=volume_z_threshold, require_momentum_confirmation=require_momentum_confirmation,
+        volume_z_threshold=volume_z_threshold, volume_window=volume_window,
+        require_momentum_confirmation=require_momentum_confirmation,
         filing_lag_days=filing_lag_days, pe_min_periods=pe_min_periods,
         momentum_window=momentum_window, rsi_window=rsi_window,
         dma_short=dma_short, dma_long=dma_long,
         price_start=price_start, holding_periods=holding_periods,
-        volume_window=20  # <-- Ye missing tha!
     )
 
     if st.button("Run Backtest", type="primary", use_container_width=True):
@@ -235,7 +276,16 @@ def main():
                 continue
 
             st.subheader(cfg["ticker"])
-            render_stock_chart(cfg["ticker"], result["merged"])
+
+            merged = result["merged"]
+            valid_pctile = merged["pe_percentile"].notna().sum()
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Total trading days", len(merged))
+            d2.metric("Days with valid PE", int(merged["pe"].notna().sum()))
+            d3.metric("Days with valid PE percentile", int(valid_pctile))
+            d4.metric("Heavy buy / sell days", f"{int(merged['heavy_buying'].sum())} / {int(merged['heavy_selling'].sum())}")
+
+            render_stock_chart(cfg["ticker"], merged)
 
             c1, c2 = st.columns(2)
             with c1:
@@ -245,12 +295,18 @@ def main():
                 st.markdown("**Heavy Selling -- forward return evaluation**")
                 st.dataframe(result["results"]["sell_signal_eval"], use_container_width=True, hide_index=True)
 
+            with st.expander("Ablation check -- is PE actually adding value, or is it just momentum?", expanded=True):
+                st.markdown("**Buy side (63-day forward return)**")
+                render_ablation_table(result["ablation_results"], "buy")
+                st.markdown("**Sell side (63-day forward return)**")
+                render_ablation_table(result["ablation_results"], "sell")
+
             buy_eval = result["results"]["buy_signal_eval"]
             sell_eval = result["results"]["sell_signal_eval"]
             summary_rows.append({
                 "Ticker": cfg["ticker"],
-                "Heavy Buying Days": int(result["merged"]["heavy_buying"].sum()),
-                "Heavy Selling Days": int(result["merged"]["heavy_selling"].sum()),
+                "Heavy Buying Days": int(merged["heavy_buying"].sum()),
+                "Heavy Selling Days": int(merged["heavy_selling"].sum()),
                 "Buy Avg Return (63d)": buy_eval.loc[buy_eval["holding_period"] == "fwd_ret_63d", "avg_signal_return"].values[0] if "fwd_ret_63d" in buy_eval["holding_period"].values else None,
                 "Sell Avg Return (63d)": sell_eval.loc[sell_eval["holding_period"] == "fwd_ret_63d", "avg_signal_return"].values[0] if "fwd_ret_63d" in sell_eval["holding_period"].values else None,
             })
