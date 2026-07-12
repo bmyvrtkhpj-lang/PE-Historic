@@ -2,24 +2,6 @@
 app.py
 ------
 PE + Technical Entry/Exit Signal Framework -- Streamlit app.
-
-Layers (see individual files for details):
-  data_pipeline.py         -> Screener export parsing + step-function daily PE
-  technical_indicators.py  -> volume z-score, momentum, RSI, DMA regime, OBV
-  pe_signal.py             -> PE percentile banding + heavy buying/selling signal
-  backtest.py              -> forward returns + statistical evaluation
-
-Deploy on Streamlit Community Cloud:
-  1. Push this whole folder to a GitHub repo (public, for the free tier).
-  2. On share.streamlit.io, "New app" -> pick the repo -> main file: app.py.
-  3. That's it -- requirements.txt is auto-installed by Streamlit Cloud.
-
-IMPORTANT LIMITATION carried over from design discussion, restated here so
-it isn't lost: PE resolution is ANNUAL (step function), not quarterly, since
-this assumes the free Screener.in export (no Prime). Corporate actions
-(mergers, demergers) must be entered manually per stock below -- they do NOT
-reliably show up as automatic EPS outliers (confirmed on real HDFC Bank data,
-where the 2023 merger looked unremarkable in the EPS series itself).
 """
 
 import pandas as pd
@@ -38,11 +20,62 @@ from pe_signal import pe_percentile_rank, generate_signals, generate_ablation_si
 from backtest import run_backtest, run_ablation_backtest
 
 
-st.set_page_config(page_title="PE + Technical Signal Framework", layout="wide")
+# Must be the first Streamlit command
+st.set_page_config(page_title="Quant Signal Framework", layout="wide")
+
+# --- INSTITUTIONAL UI CSS INJECTION ---
+st.markdown("""
+    <style>
+    /* Stealth Dark Mode Background */
+    .stApp {
+        background-color: #0d1117;
+        color: #c9d1d9;
+    }
+    
+    /* Hide Streamlit Branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Professional Metric Cards */
+    div[data-testid="metric-container"] {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 4px;
+        padding: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    
+    /* Clean up expanders and tabs */
+    .st-expander {
+        background-color: #161b22;
+        border-color: #30363d;
+    }
+    
+    /* Accent color overrides for sliders/buttons */
+    div.stButton > button:first-child {
+        background-color: #238636;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-weight: 600;
+        margin-top: 15px;
+        padding: 20px 0px;
+    }
+    div.stButton > button:hover {
+        background-color: #2ea043;
+        border: none;
+    }
+    
+    /* Top padding reduction for clean look */
+    .block-container {
+        padding-top: 2rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 
 def parse_exclusions(text):
-    """Parses 'YYYY-MM-DD:YYYY-MM-DD, YYYY-MM-DD:YYYY-MM-DD' into a list of tuples."""
     if not text or not text.strip():
         return []
     windows = []
@@ -54,20 +87,12 @@ def parse_exclusions(text):
             start, end = chunk.split(":")
             windows.append((start.strip(), end.strip()))
         except ValueError:
-            st.warning(f"Could not parse exclusion window '{chunk}' -- expected format YYYY-MM-DD:YYYY-MM-DD, skipping it.")
+            st.warning(f"Could not parse exclusion window '{chunk}' -- expected format YYYY-MM-DD:YYYY-MM-DD")
     return windows
 
 
-@st.cache_data(ttl=86400, show_spinner=False)  # 24 hours cache
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_all_nse_stocks():
-    """
-    Fetches the live list of all NSE equity stocks dynamically.
-    NOTE: not verified live from this environment (no internet access here) --
-    test this a few times from the deployed app to confirm NSE's archive
-    endpoint reliably returns the full list and doesn't get blocked/rate-limited
-    for scripted requests. The fallback dict below only has 3 stocks, so if this
-    fetch silently fails often, the dropdown will be far less useful than intended.
-    """
     try:
         url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
         headers = {
@@ -80,7 +105,6 @@ def get_all_nse_stocks():
         for _, row in df.iterrows():
             display_name = f"{row['NAME OF COMPANY']} ({row['SYMBOL']})"
             mapping[display_name] = f"{row['SYMBOL']}.NS"
-
         return mapping
     except Exception:
         return {
@@ -97,12 +121,11 @@ def cached_price_volume(ticker, start, end):
 
 def run_single_stock(ticker, xlsx_file, exclusions_text, params):
     annual = extract_annual_fundamentals(xlsx_file)
-
     price_start = params["price_start"]
     price_end = pd.Timestamp.today().strftime("%Y-%m-%d")
     price_df = cached_price_volume(ticker, price_start, price_end)
     if price_df.empty:
-        return None, f"No price/volume data returned for {ticker}. Check the ticker format (e.g. HDFCBANK.NS)."
+        return None, f"No price/volume data returned for {ticker}."
 
     pe_df = build_step_function_pe(annual, price_df["price"], filing_lag_days=params["filing_lag_days"])
     exclusions = parse_exclusions(exclusions_text)
@@ -143,33 +166,46 @@ def render_stock_chart(ticker, merged):
         st.info("plotly not installed -- skipping chart.")
         return
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="Price", yaxis="y", line=dict(width=1.6)))
+    
+    # Base Price Line (Subtle)
+    fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="Price", yaxis="y", 
+                             line=dict(width=1.5, color="#8b949e")))
+    
     buys = merged[merged["heavy_buying"]]
     sells = merged[merged["heavy_selling"]]
+    
+    # High-Vis Neon Markers for Institutional Look
     fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="Heavy Buying",
-                              marker=dict(color="green", size=9, symbol="triangle-up")))
+                              marker=dict(color="#00FFCC", size=10, symbol="triangle-up", 
+                                          line=dict(color="black", width=1))))
     fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="Heavy Selling",
-                              marker=dict(color="red", size=9, symbol="triangle-down")))
+                              marker=dict(color="#FF007F", size=10, symbol="triangle-down", 
+                                          line=dict(color="black", width=1))))
+                                          
+    # PE Percentile (Orange Dashed)
     fig.add_trace(go.Scatter(x=merged.index, y=merged["pe_percentile"] * 100, name="PE Percentile",
-                              yaxis="y2", line=dict(width=1.2, dash="dot", color="orange")))
+                              yaxis="y2", line=dict(width=1, dash="dot", color="#f78166")))
+                              
     fig.update_layout(
-        title=f"{ticker} -- Price with Heavy Buying/Selling Signals + PE Percentile",
-        height=440,
-        yaxis=dict(title="Price"),
-        yaxis2=dict(title="PE Percentile (%)", overlaying="y", side="right", range=[0, 100]),
-        legend=dict(orientation="h", y=1.05),
-        margin=dict(l=10, r=10, t=50, b=10),
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        title=dict(text=f"{ticker} | Technical & Valuation Signal Analysis", font=dict(size=18, color="#e6edf3")),
+        height=550,
+        yaxis=dict(title="Price (INR)", showgrid=True, gridcolor="#30363d"),
+        yaxis2=dict(title="PE Percentile (%)", overlaying="y", side="right", range=[0, 100], showgrid=False),
+        legend=dict(orientation="h", y=1.05, x=0, bgcolor='rgba(0,0,0,0)'),
+        margin=dict(l=10, r=10, t=60, b=10),
+        hovermode="x unified"
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def render_ablation_table(ablation_results, side):
-    """side = 'buy' or 'sell'. Shows the 3 variants stacked so PE's marginal
-    contribution beyond the technical trigger alone is visible at a glance."""
     labels = {
-        f"{side}_pe_only": "PE zone ONLY (no technical confirmation)",
-        f"{side}_technical_only": "Technical trigger ONLY (no PE condition)",
-        f"{side}_combined": "PE + Technical COMBINED (the actual signal)",
+        f"{side}_pe_only": "Valuation ONLY",
+        f"{side}_technical_only": "Technical ONLY",
+        f"{side}_combined": "COMBINED SIGNAL",
     }
     rows = []
     for key, label in labels.items():
@@ -182,73 +218,64 @@ def render_ablation_table(ablation_results, side):
         row = row.iloc[0]
         rows.append({
             "Variant": label,
-            "n_signals": row["n_signals"],
-            "avg_return_63d": row["avg_signal_return"],
-            "win_rate": row["win_rate"],
-            "p_value": row["p_value"],
+            "Signals (n)": row["n_signals"],
+            "Avg Return (63d)": f"{row['avg_signal_return']:.2%}" if pd.notnull(row['avg_signal_return']) else "N/A",
+            "Win Rate": f"{row['win_rate']:.2%}" if pd.notnull(row['win_rate']) else "N/A",
+            "p-value": f"{row['p_value']:.4f}" if pd.notnull(row['p_value']) else "N/A",
         })
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.caption(
-            "If 'COMBINED' isn't meaningfully better than 'Technical ONLY', the PE "
-            "condition isn't adding much beyond the technical trigger alone -- worth "
-            "knowing before claiming the valuation component is what's driving results."
-        )
 
 
 def main():
-    st.title("PE + Technical Entry/Exit Signal Framework")
-    st.caption(
-        "Multi-stock framework: valuation (PE percentile, own history) confirmed by a "
-        "technical trigger (volume z-score + momentum). Annual-EPS step function -- "
-        "see module docstrings for the reasoning and known limitations."
-    )
-
-    st.header("1. Universe setup")
-    n_stocks = st.number_input("Number of stocks", min_value=1, max_value=100, value=1, step=1)
-
-    stock_configs = []
-    for i in range(int(n_stocks)):
-        with st.expander(f"Stock {i + 1}", expanded=(i == 0)):
-            c1, c2 = st.columns(2)
-            with c1:
-                TICKER_MAPPING = get_all_nse_stocks()
-                company_name = st.selectbox(
-                    "Search Indian Stock",
-                    options=list(TICKER_MAPPING.keys()),
-                    index=None,
-                    placeholder="Type company name (e.g. Zomato, Tata Motors)",
-                    key=f"name_{i}"
-                )
-                ticker = TICKER_MAPPING.get(company_name) if company_name else ""
-            with c2:
-                xlsx_file = st.file_uploader("Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
-            exclusions_text = st.text_input(
-                "Corporate action exclusion windows (optional) -- format YYYY-MM-DD:YYYY-MM-DD, comma-separated for multiple",
-                key=f"exclusions_{i}",
-                help="e.g. 2023-05-01:2024-08-01 for a merger year. These are NOT auto-detected -- see module notes on why.",
-            )
-            stock_configs.append({"ticker": ticker, "xlsx_file": xlsx_file, "exclusions_text": exclusions_text})
-
-    st.header("2. Backtest parameters")
-    c1, c2, c3 = st.columns(3)
+    st.title("Systematic Entry/Exit Framework")
+    st.markdown("*Valuation (PE own-history) confirmed by technical triggers (Volume Z-Score + Momentum).*")
+    st.markdown("---")
+    
+    # --- TOP COMMAND CENTER (No Sidebar) ---
+    st.markdown("### 🎛️ Command Center")
+    
+    # Row 1: Data Inputs
+    c1, c2, c3 = st.columns([1.5, 1.5, 1])
     with c1:
-        cheap_pctile = st.slider("Cheap PE percentile threshold", 0.05, 0.50, 0.20, 0.05)
-        expensive_pctile = st.slider("Expensive PE percentile threshold", 0.50, 0.95, 0.80, 0.05)
-        filing_lag_days = st.number_input("Annual filing lag (days)", min_value=0, max_value=180, value=60, step=5)
+        TICKER_MAPPING = get_all_nse_stocks()
+        company_name = st.selectbox("Search Indian Stock", options=list(TICKER_MAPPING.keys()), index=None, placeholder="e.g. HDFC Bank")
+        ticker = TICKER_MAPPING.get(company_name) if company_name else ""
     with c2:
-        volume_z_threshold = st.slider("Volume z-score threshold ('heavy')", 0.5, 4.0, 1.5, 0.1)
-        volume_window = st.number_input("Volume rolling window (days, for z-score)", min_value=5, max_value=120, value=20, step=5)
-        require_momentum_confirmation = st.checkbox("Require momentum confirmation", value=True)
-        pe_min_periods = st.number_input("Min days before PE percentile starts", min_value=30, max_value=1000, value=252, step=10)
+        xlsx_file = st.file_uploader("Screener.in Export (.xlsx)", type=["xlsx"])
     with c3:
-        momentum_window = st.number_input("Momentum window (days)", min_value=2, max_value=60, value=10)
-        rsi_window = st.number_input("RSI window (days)", min_value=2, max_value=60, value=14)
-        price_start = st.text_input("Price history start date", value="2016-01-01")
+        exclusions_text = st.text_input("Corp Action Exclusions", help="YYYY-MM-DD:YYYY-MM-DD")
 
-    dma_short = st.number_input("Short DMA (days)", min_value=5, max_value=100, value=50)
-    dma_long = st.number_input("Long DMA (days)", min_value=50, max_value=400, value=200)
-    holding_periods_text = st.text_input("Forward holding periods (trading days, comma-separated)", value="21,63,126,252")
+    # Row 2: Signal Parameters
+    p1, p2, p3, p4 = st.columns([1, 1, 1, 1])
+    with p1:
+        cheap_pctile = st.slider("Cheap PE Percentile", 0.05, 0.50, 0.20, 0.05)
+    with p2:
+        expensive_pctile = st.slider("Expensive PE Percentile", 0.50, 0.95, 0.80, 0.05)
+    with p3:
+        volume_z_threshold = st.slider("Volume Spike (z-score)", 0.5, 4.0, 1.5, 0.1)
+    with p4:
+        require_momentum_confirmation = st.checkbox("Require Momentum", value=True)
+        run_btn = st.button("RUN BACKTEST", type="primary", use_container_width=True)
+        
+    # Row 3: Advanced Settings (Collapsible)
+    with st.expander("⚙️ Advanced Settings"):
+        a1, a2, a3, a4 = st.columns(4)
+        with a1:
+            volume_window = st.number_input("Vol Rolling Win (days)", value=20)
+            momentum_window = st.number_input("Momentum Win (days)", value=10)
+        with a2:
+            rsi_window = st.number_input("RSI Win (days)", value=14)
+            dma_short = st.number_input("Short DMA", value=50)
+        with a3:
+            dma_long = st.number_input("Long DMA", value=200)
+            filing_lag_days = st.number_input("Filing Lag (days)", value=60)
+        with a4:
+            pe_min_periods = st.number_input("Min PE History (days)", value=252)
+            price_start = st.text_input("Start Date", value="2016-01-01")
+            
+        holding_periods_text = st.text_input("Holding Periods", value="21,63,126,252")
+
     holding_periods = tuple(int(x.strip()) for x in holding_periods_text.split(",") if x.strip())
 
     params = dict(
@@ -261,59 +288,60 @@ def main():
         price_start=price_start, holding_periods=holding_periods,
     )
 
-    if st.button("Run Backtest", type="primary", use_container_width=True):
-        valid_configs = [s for s in stock_configs if s["ticker"] and s["xlsx_file"] is not None]
-        if not valid_configs:
-            st.warning("Add at least one stock with both a ticker and a Screener export before running.")
+    st.markdown("---")
+
+    # --- MAIN STAGE: DASHBOARD ---
+    if not ticker or xlsx_file is None:
+        st.info("👆 Please select a stock and upload its Screener.in Excel export above to begin.")
+        return
+
+    if run_btn:
+        with st.spinner(f"Aggregating data for {ticker}..."):
+            result, err = run_single_stock(ticker, xlsx_file, exclusions_text, params)
+        
+        if err:
+            st.error(err)
             return
 
-        summary_rows = []
-        for cfg in valid_configs:
-            with st.spinner(f"Running {cfg['ticker']}..."):
-                result, err = run_single_stock(cfg["ticker"], cfg["xlsx_file"], cfg["exclusions_text"], params)
-            if err:
-                st.error(f"{cfg['ticker']}: {err}")
-                continue
+        merged = result["merged"]
+        
+        # Top level KPIs
+        st.markdown("### Risk & Exposure Overview")
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Total Trading Days", len(merged))
+        d2.metric("Valid PE Days", int(merged["pe"].notna().sum()))
+        d3.metric("Heavy Buy Triggers", int(merged['heavy_buying'].sum()))
+        d4.metric("Heavy Sell Triggers", int(merged['heavy_selling'].sum()))
 
-            st.subheader(cfg["ticker"])
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Charting
+        render_stock_chart(ticker, merged)
+        
+        st.markdown("---")
+        
+        # Evaluation Tables
+        st.markdown("### Forward Return Evaluation")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**🟢 Heavy Buying Zones**")
+            st.dataframe(result["results"]["buy_signal_eval"], use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**🔴 Heavy Selling Zones**")
+            st.dataframe(result["results"]["sell_signal_eval"], use_container_width=True, hide_index=True)
 
-            merged = result["merged"]
-            valid_pctile = merged["pe_percentile"].notna().sum()
-            d1, d2, d3, d4 = st.columns(4)
-            d1.metric("Total trading days", len(merged))
-            d2.metric("Days with valid PE", int(merged["pe"].notna().sum()))
-            d3.metric("Days with valid PE percentile", int(valid_pctile))
-            d4.metric("Heavy buy / sell days", f"{int(merged['heavy_buying'].sum())} / {int(merged['heavy_selling'].sum())}")
-
-            render_stock_chart(cfg["ticker"], merged)
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Heavy Buying -- forward return evaluation**")
-                st.dataframe(result["results"]["buy_signal_eval"], use_container_width=True, hide_index=True)
-            with c2:
-                st.markdown("**Heavy Selling -- forward return evaluation**")
-                st.dataframe(result["results"]["sell_signal_eval"], use_container_width=True, hide_index=True)
-
-            with st.expander("Ablation check -- is PE actually adding value, or is it just momentum?", expanded=True):
-                st.markdown("**Buy side (63-day forward return)**")
-                render_ablation_table(result["ablation_results"], "buy")
-                st.markdown("**Sell side (63-day forward return)**")
-                render_ablation_table(result["ablation_results"], "sell")
-
-            buy_eval = result["results"]["buy_signal_eval"]
-            sell_eval = result["results"]["sell_signal_eval"]
-            summary_rows.append({
-                "Ticker": cfg["ticker"],
-                "Heavy Buying Days": int(merged["heavy_buying"].sum()),
-                "Heavy Selling Days": int(merged["heavy_selling"].sum()),
-                "Buy Avg Return (63d)": buy_eval.loc[buy_eval["holding_period"] == "fwd_ret_63d", "avg_signal_return"].values[0] if "fwd_ret_63d" in buy_eval["holding_period"].values else None,
-                "Sell Avg Return (63d)": sell_eval.loc[sell_eval["holding_period"] == "fwd_ret_63d", "avg_signal_return"].values[0] if "fwd_ret_63d" in sell_eval["holding_period"].values else None,
-            })
-
-        if summary_rows:
-            st.header("Multi-stock summary")
-            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        
+        # Ablation Module
+        st.markdown("### Alpha Source Attribution (Ablation Check)")
+        st.caption("Isolating whether the edge comes from the valuation zone, the technical trigger, or the combination.")
+        a1, a2 = st.columns(2)
+        with a1:
+            st.markdown("**Buy Side Edge (63d)**")
+            render_ablation_table(result["ablation_results"], "buy")
+        with a2:
+            st.markdown("**Sell Side Edge (63d)**")
+            render_ablation_table(result["ablation_results"], "sell")
 
 
 if __name__ == "__main__":
