@@ -249,32 +249,74 @@ def render_ablation_table(ablation_results, side):
         row = df[df["holding_period"] == "fwd_ret_63d"]
         if row.empty: continue
         row = row.iloc[0]
+        
+        # Format P-Value strictly
+        pval = row['p_value']
+        if pd.notnull(pval):
+            pval_str = "<0.001" if pval < 0.001 else f"{pval:.4f}"
+        else:
+            pval_str = "-"
+
         rows.append({
             "TYPE": label,
             "SIG": row["n_signals"],
             "RET(63D)": f"{row['avg_signal_return']:.2%}" if pd.notnull(row['avg_signal_return']) else "-",
             "WIN(%)": f"{row['win_rate']:.2%}" if pd.notnull(row['win_rate']) else "-",
-            "P-VAL": f"{row['p_value']:.4f}" if pd.notnull(row['p_value']) else "-",
+            "P-VAL": pval_str,
         })
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+def format_terminal_df(df):
+    """Formats raw backtest DataFrame into a clean Terminal-style display."""
+    if df is None or df.empty: return df
+    out = df.copy()
+    
+    # Rename columns to Bloomberg style shorthand
+    out = out.rename(columns={
+        "holding_period": "PERIOD",
+        "n_signals": "SIG_CNT",
+        "avg_signal_return": "AVG_RET",
+        "avg_baseline_return": "BASE_RET",
+        "win_rate": "WIN_RATE",
+        "t_stat": "T_STAT",
+        "p_value": "P_VAL"
+    })
+    
+    # Format percentages
+    for col in ["AVG_RET", "BASE_RET", "WIN_RATE"]:
+        if col in out.columns:
+            out[col] = out[col].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "-")
+            
+    # Format Stats
+    if "T_STAT" in out.columns:
+        out["T_STAT"] = out["T_STAT"].apply(lambda x: f"{x:.2f}" if pd.notnull(x) else "-")
+    if "P_VAL" in out.columns:
+        out["P_VAL"] = out["P_VAL"].apply(lambda x: "<0.001" if pd.notnull(x) and x < 0.001 else (f"{x:.4f}" if pd.notnull(x) else "-"))
+        
+    # Drop messy raw notes column if it exists
+    if "note" in out.columns:
+        out = out.drop(columns=["note"])
+        
+    return out
 
 def main():
     st.markdown("<h3 style='color: #FFB000; font-family: monospace; font-size: 1.2rem;'>[ BLOOMBERG ] SYSTEMATIC QUANT FRAMEWORK</h3>", unsafe_allow_html=True)
     
-    # --- COMMAND BAR ---
-    c1, c2, c3, c4 = st.columns([2.5, 1.5, 1, 1], vertical_alignment="bottom")
+    # --- COMMAND BAR (Overlap Fixed) ---
+    # Adjusted ratios so file uploader gets more space, removed vertical_alignment to prevent squishing
+    c1, c2, c3, c4 = st.columns([3, 3, 2, 2])
     
     with c1:
         TICKER_MAPPING = get_all_nse_stocks()
-        company_name = st.selectbox("TICKER / SECURITY", options=list(TICKER_MAPPING.keys()), index=None, placeholder="<SEARCH TICKER>")
+        company_name = st.selectbox("TICKER", options=list(TICKER_MAPPING.keys()), index=None, placeholder="<SEARCH TICKER>")
         ticker = TICKER_MAPPING.get(company_name) if company_name else ""
         
     with c2:
-        xlsx_file = st.file_uploader("FUNDAMENTAL DATA (.XLSX)", type=["xlsx"])
+        xlsx_file = st.file_uploader("DATA (.XLSX)", type=["xlsx"])
         
     with c3:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True) # Aligns popover with inputs
         with st.popover("[ STRAT PARAMS ]", use_container_width=True):
             st.markdown("<span style='color:#FFB000'>VALUATION BOUNDS</span>", unsafe_allow_html=True)
             cheap_pctile = st.slider("CHEAP PE %", 0.05, 0.50, 0.20, 0.05)
@@ -297,6 +339,7 @@ def main():
             exclusions_text = st.text_input("EXCLUSIONS", help="YYYY-MM-DD:YYYY-MM-DD")
 
     with c4:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True) # Aligns button with inputs
         run_btn = st.button("< EXECUTE >", type="primary", use_container_width=True)
 
     holding_periods = tuple(int(x.strip()) for x in holding_periods_text.split(",") if x.strip())
@@ -315,7 +358,7 @@ def main():
 
     # --- MAIN TERMINAL DISPLAY ---
     if not ticker or xlsx_file is None:
-        st.markdown("<span style='color:#00FF00; font-family:monospace;'>[SYSTEM] AWAITING INPUTS. SELECT TICKER AND UPLOAD EXCEL DATA.</span>", unsafe_allow_html=True)
+        st.markdown("<span style='color:#00FF00; font-family:monospace;'>[SYSTEM] AWAITING INPUTS...</span>", unsafe_allow_html=True)
         return
 
     if run_btn:
@@ -342,14 +385,14 @@ def main():
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Data Tables
+        # Data Tables - Now Formatted!
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("<span style='color:#00FF00; font-family:monospace; border-bottom: 1px solid #00FF00;'>[ BUY ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
-            st.dataframe(result["results"]["buy_signal_eval"], use_container_width=True, hide_index=True)
+            st.dataframe(format_terminal_df(result["results"]["buy_signal_eval"]), use_container_width=True, hide_index=True)
         with c2:
             st.markdown("<span style='color:#FF0000; font-family:monospace; border-bottom: 1px solid #FF0000;'>[ SELL ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
-            st.dataframe(result["results"]["sell_signal_eval"], use_container_width=True, hide_index=True)
+            st.dataframe(format_terminal_df(result["results"]["sell_signal_eval"]), use_container_width=True, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         
