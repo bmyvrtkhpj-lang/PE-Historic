@@ -81,24 +81,20 @@ def generate_ablation_signals(df: pd.DataFrame,
                                require_momentum_confirmation: bool = True) -> pd.DataFrame:
     """
     Isolates which component is actually doing the work: PE valuation alone,
-    the technical trigger alone, or both combined. This matters because a
-    positive-momentum requirement inside 'heavy_buying' can, by itself,
-    produce better-than-baseline forward returns (a well-documented momentum
-    effect, unrelated to valuation) -- so a combined signal beating an
-    "all days" baseline does NOT by itself prove the PE component is adding
-    information. Compare the three columns below before making that claim.
-
-    Adds: buy_pe_only, buy_technical_only, buy_combined,
-          sell_pe_only, sell_technical_only, sell_combined.
+    the technical trigger alone, or both combined. 
     """
     out = df.copy()
-    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else pd.Series(True, index=out.index)
-    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else pd.Series(True, index=out.index)
+    
+    # Handle momentum checks safely
+    momentum_buy_ok = (out["momentum"] > 0) if require_momentum_confirmation else True
+    momentum_sell_ok = (out["momentum"] < 0) if require_momentum_confirmation else True
 
+    # Buy Ablations
     out["buy_pe_only"] = (out["pe_percentile"] <= cheap_pctile).fillna(False)
     out["buy_technical_only"] = ((out["volume_zscore"] >= volume_z_threshold) & momentum_buy_ok).fillna(False)
     out["buy_combined"] = (out["buy_pe_only"] & out["buy_technical_only"])
 
+    # Sell Ablations
     out["sell_pe_only"] = (out["pe_percentile"] >= expensive_pctile).fillna(False)
     out["sell_technical_only"] = ((out["volume_zscore"] >= volume_z_threshold) & momentum_sell_ok).fillna(False)
     out["sell_combined"] = (out["sell_pe_only"] & out["sell_technical_only"])
