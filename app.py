@@ -165,19 +165,20 @@ def main():
         with st.expander(f"Stock {i + 1}", expanded=(i == 0)):
             c1, c2 = st.columns(2)
             with c1:
-                # Aap is list me apne universe ke saare tickers add kar sakte ho
-                TICKER_LIST = [
-                    "HDFCBANK.NS", "RELIANCE.NS", "TCS.NS", "INFY.NS", "ICICIBANK.NS",
-                    "HUL.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS",
-                    "LT.NS", "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS", "ASIANPAINT.NS"
-                ]
+                # 2000+ Indian stocks ka data load karo
+                TICKER_MAPPING = get_all_nse_stocks()
                 
-                ticker = st.selectbox(
-                    f"Yahoo Finance ticker", 
-                    options=TICKER_LIST,
+                # Dropdown mein ab kisi bhi company ka naam search kar sakte ho
+                company_name = st.selectbox(
+                    f"Search Indian Stock", 
+                    options=list(TICKER_MAPPING.keys()),
                     index=None,
-                    placeholder="Type to search (e.g. HDFCBANK.NS)",
-                    key=f"ticker_{i}"
+                    placeholder="Type company name (e.g. Zomato, Tata Motors)",
+                    key=f"name_{i}"
+                )
+                
+                # Background mein code automatically usko '.NS' wala ticker bana lega
+                ticker = TICKER_MAPPING.get(company_name) if company_name else ""
                 )
             with c2:
                 xlsx_file = st.file_uploader(f"Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
