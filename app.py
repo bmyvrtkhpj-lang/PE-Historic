@@ -137,7 +137,20 @@ def main():
         with st.expander(f"Stock {i + 1}", expanded=(i == 0)):
             c1, c2 = st.columns(2)
             with c1:
-                ticker = st.text_input(f"Yahoo Finance ticker (e.g. HDFCBANK.NS)", key=f"ticker_{i}")
+                # Aap is list me apne universe ke saare tickers add kar sakte ho
+                TICKER_LIST = [
+                    "HDFCBANK.NS", "RELIANCE.NS", "TCS.NS", "INFY.NS", "ICICIBANK.NS",
+                    "HUL.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS",
+                    "LT.NS", "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS", "ASIANPAINT.NS"
+                ]
+                
+                ticker = st.selectbox(
+                    f"Yahoo Finance ticker", 
+                    options=TICKER_LIST,
+                    index=None,
+                    placeholder="Type to search (e.g. HDFCBANK.NS)",
+                    key=f"ticker_{i}"
+                )
             with c2:
                 xlsx_file = st.file_uploader(f"Screener.in Excel export", type=["xlsx"], key=f"file_{i}")
             exclusions_text = st.text_input(
