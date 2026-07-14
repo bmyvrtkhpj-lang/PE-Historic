@@ -106,3 +106,41 @@ def classify_quadrant(pe_percentile: pd.Series,
     result = pd.Series(np.select(conditions, labels, default=None), index=pe_percentile.index)
     result[pe_percentile.isna() | delivery_percentile.isna()] = None
     return result
+
+
+def generate_quadrant_signals(df: pd.DataFrame, vadm_buy_threshold: float = 0.15, vadm_sell_threshold: float = 0.15) -> pd.DataFrame:
+    """
+    Replaces the old volume+momentum based generate_signals(). VADM is now
+    THE operational signal -- the quadrant is the visual/conceptual 4-state
+    classification, VADM is the continuous score actually thresholded here.
+
+    df must already contain 'vadm' (from compute_vadm).
+    Adds: heavy_buying (vadm > +threshold), heavy_selling (vadm < -threshold).
+    """
+    out = df.copy()
+    out["heavy_buying"] = (out["vadm"] > vadm_buy_threshold).fillna(False)
+    out["heavy_selling"] = (out["vadm"] < -vadm_sell_threshold).fillna(False)
+    return out
+
+
+def generate_quadrant_ablation_signals(df: pd.DataFrame, cheap_pctile: float = 0.5, delivery_pctile_midpoint: float = 0.5) -> pd.DataFrame:
+    """
+    Replaces the old volume+momentum based generate_ablation_signals().
+    Now tests H1 (PE main effect alone) vs H2 (delivery main effect alone)
+    vs H3-manifestation (VADM/quadrant combined) directly -- this ablation
+    IS the practical test of your three hypotheses side by side (the formal
+    statistical H3 test is test_h3_interaction() in backtest.py; this is
+    the simpler subgroup-comparison view of the same question).
+
+    df must already contain 'pe_percentile', 'delivery_percentile',
+    'heavy_buying', 'heavy_selling' (from generate_quadrant_signals).
+    """
+    out = df.copy()
+    out["buy_pe_only"] = (out["pe_percentile"] <= cheap_pctile).fillna(False)
+    out["buy_delivery_only"] = (out["delivery_percentile"] > delivery_pctile_midpoint).fillna(False)
+    out["buy_combined"] = out["heavy_buying"]
+
+    out["sell_pe_only"] = (out["pe_percentile"] >= (1 - cheap_pctile)).fillna(False)
+    out["sell_delivery_only"] = (out["delivery_percentile"] <= delivery_pctile_midpoint).fillna(False)
+    out["sell_combined"] = out["heavy_selling"]
+    return out
