@@ -1,13 +1,14 @@
 """
 app.py
 ------
-PE + Technical Entry/Exit Signal Framework -- Streamlit app.
+PE + Delivery Valuation Signal Framework -- Streamlit app.
 """
 
 import pandas as pd
 import streamlit as st
 import requests
 import io
+import time
 
 try:
     import plotly.graph_objects as go
@@ -16,87 +17,111 @@ except ImportError:
 
 from data_pipeline import extract_annual_fundamentals, build_step_function_pe, apply_corporate_action_exclusions, fetch_price_volume, fetch_eod2_delivery_data
 from technical_indicators import add_all_technical_indicators
-from pe_signal import pe_percentile_rank, delivery_percentile_rank, generate_signals, generate_ablation_signals
-from vadm import delivery_flow_strength, compute_vadm, classify_quadrant
-from backtest import run_backtest, run_ablation_backtest
+from pe_signal import pe_percentile_rank, delivery_percentile_rank
+from vadm import delivery_flow_strength, compute_vadm, classify_quadrant, generate_quadrant_signals, generate_quadrant_ablation_signals
+from backtest import run_backtest, run_ablation_backtest, test_h3_interaction
 
+
+APP_NAME = "VADM TERMINAL"
+
+# Color palette -- deliberately softer than pure neon-on-black. Same dark,
+# sharp, monospace terminal FEEL, but desaturated enough to not strain the
+# eyes on a long session. Used consistently across CSS and every chart.
+BG = "#0B0E14"
+PANEL_BG = "#11151C"
+BORDER = "#242B38"
+GRID = "#1C212B"
+TEXT = "#E6EDF3"
+TEXT_MUTED = "#8B949E"
+ACCENT = "#D4A017"
+GREEN = "#3FB950"
+RED = "#F85149"
+CAUTION = "#D29922"
+MUTED_GRAY = "#6E7681"
 
 # Must be the first Streamlit command
-st.set_page_config(page_title="BLOOMBERG TERMINAL - QUANT FRAMEWORK", layout="wide")
+st.set_page_config(page_title=f"{APP_NAME}", layout="wide", page_icon=":chart_with_upwards_trend:")
 
-# --- BLOOMBERG TERMINAL EXACT CSS INJECTION ---
-st.markdown("""
+st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
-    p, div, h1, h2, h3, h4, h5, h6, label, input, button, li {
-        font-family: 'Space Mono', 'Consolas', 'Courier New', monospace !important;
-    }
-    span.material-symbols-rounded, span.material-icons, .stIcon {
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+    p, div, h1, h2, h3, h4, h5, h6, label, input, button, li {{
+        font-family: 'IBM Plex Mono', 'Consolas', 'Courier New', monospace !important;
+    }}
+    span.material-symbols-rounded, span.material-icons, .stIcon {{
         font-family: 'Material Symbols Rounded' !important;
-    }
-    .stApp {
-        background-color: #000000;
-        color: #FFFFFF;
-    }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .block-container {
-        padding-top: 1rem !important;
+    }}
+    .stApp {{
+        background-color: {BG};
+        color: {TEXT};
+    }}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    .block-container {{
+        padding-top: 1.5rem !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;
         max-width: 100% !important;
-    }
-    div[data-testid="metric-container"] {
-        background-color: #000000;
-        border: 1px solid #333333;
-        border-radius: 0px;
+    }}
+    div[data-testid="metric-container"] {{
+        background-color: {PANEL_BG};
+        border: 1px solid {BORDER};
+        border-radius: 3px;
         padding: 10px 15px;
-        border-top: 2px solid #FFB000;
-    }
-    div[data-testid="stMetricValue"] > div {
-        color: #FFFFFF !important;
-        font-size: 1.8rem !important;
-    }
-    div[data-testid="stMetricLabel"] > div > div > p {
-        color: #FFB000 !important;
-        font-weight: bold;
+        border-top: 2px solid {ACCENT};
+    }}
+    div[data-testid="stMetricValue"] > div {{
+        color: {TEXT} !important;
+        font-size: 1.6rem !important;
+    }}
+    div[data-testid="stMetricLabel"] > div > div > p {{
+        color: {ACCENT} !important;
+        font-weight: 600;
         text-transform: uppercase;
-    }
-    div.stSelectbox > div > div, input {
-        background-color: #000000 !important;
-        color: #FFFFFF !important;
-        border: 1px solid #333333 !important;
-        border-radius: 0px !important;
-    }
-    div.stButton > button[kind="primary"] {
-        background-color: #000000;
-        color: #00FF00;
-        border: 1px solid #00FF00;
-        border-radius: 0px;
-        font-weight: 700;
+        font-size: 0.78rem !important;
+        letter-spacing: 0.04em;
+    }}
+    div.stSelectbox > div > div, input {{
+        background-color: {PANEL_BG} !important;
+        color: {TEXT} !important;
+        border: 1px solid {BORDER} !important;
+        border-radius: 3px !important;
+    }}
+    div.stButton > button[kind="primary"] {{
+        background-color: {PANEL_BG};
+        color: {GREEN};
+        border: 1px solid {GREEN};
+        border-radius: 3px;
+        font-weight: 600;
         text-transform: uppercase;
+        letter-spacing: 0.05em;
         height: 100%;
         margin-top: 15px;
-        padding: 20px 0px;
-    }
-    div.stButton > button[kind="primary"]:hover {
-        background-color: #00FF00;
-        color: #000000;
-    }
-    .st-expander, .stPopover {
-        border-color: #333333 !important;
-        border-radius: 0px !important;
-        background-color: #000000 !important;
-    }
-    h1, h2, h3, h4, h5, h6, p {
-        color: #FFFFFF;
-    }
-    hr {
-        border-color: #333333;
-    }
+        padding: 18px 0px;
+        transition: background-color 0.15s ease;
+    }}
+    div.stButton > button[kind="primary"]:hover {{
+        background-color: {GREEN};
+        color: {BG};
+    }}
+    .st-expander, .stPopover {{
+        border-color: {BORDER} !important;
+        border-radius: 3px !important;
+        background-color: {PANEL_BG} !important;
+    }}
+    h1, h2, h3, h4, h5, h6, p {{
+        color: {TEXT};
+    }}
+    hr {{
+        border-color: {BORDER};
+    }}
+    ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+    ::-webkit-scrollbar-track {{ background: {BG}; }}
+    ::-webkit-scrollbar-thumb {{ background: {BORDER}; border-radius: 4px; }}
     </style>
 """, unsafe_allow_html=True)
+
+
 
 
 def parse_exclusions(text):
@@ -163,95 +188,70 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         dma_long=params["dma_long"],
     )
     merged["pe_percentile"] = pe_percentile_rank(merged["pe"], min_periods=params["pe_min_periods"])
-    merged = generate_signals(
-        merged,
-        cheap_pctile=params["cheap_pctile"],
-        expensive_pctile=params["expensive_pctile"],
-        volume_z_threshold=params["volume_z_threshold"],
-        require_momentum_confirmation=params["require_momentum_confirmation"],
-    )
-    merged = generate_ablation_signals(
-        merged,
-        cheap_pctile=params["cheap_pctile"],
-        expensive_pctile=params["expensive_pctile"],
-        volume_z_threshold=params["volume_z_threshold"],
-        require_momentum_confirmation=params["require_momentum_confirmation"],
-    )
 
     # --- Delivery / VADM / Quadrant layer (sir's redesigned framework) ---
     nse_symbol = ticker.replace(".NS", "").replace(".BO", "")
     deliv_df, deliv_err = fetch_eod2_delivery_data(nse_symbol)
     if deliv_err:
-        st.warning(f"[QUADRANT] Delivery data unavailable for {nse_symbol}: {deliv_err} -- quadrant/VADM will be empty.")
-        merged["delivery_pct"] = None
-        merged["delivery_percentile"] = None
-        merged["quadrant"] = None
-        merged["vadm"] = None
-    else:
-        merged = merged.join(deliv_df[["delivery_pct"]], how="left")
-        merged["delivery_percentile"] = delivery_percentile_rank(merged["delivery_pct"], min_periods=params["pe_min_periods"])
-        merged["quadrant"] = classify_quadrant(merged["pe_percentile"], merged["delivery_percentile"])
-        flow = delivery_flow_strength(merged["delivery_percentile"])
-        merged["vadm"] = compute_vadm(merged["pe_percentile"], flow)
-        if deliv_df.attrs.get("n_impossible_delivery_pct_rows_removed"):
-            st.caption(f"[DATA] {deliv_df.attrs['n_impossible_delivery_pct_rows_removed']} impossible delivery% rows (>100%) cleaned for {nse_symbol}.")
+        return None, f"Delivery data unavailable for {nse_symbol}: {deliv_err}"
+
+    merged = merged.join(deliv_df[["delivery_pct"]], how="left")
+    merged["delivery_percentile"] = delivery_percentile_rank(merged["delivery_pct"], min_periods=params["pe_min_periods"])
+    merged["quadrant"] = classify_quadrant(merged["pe_percentile"], merged["delivery_percentile"])
+    merged["delivery_flow"] = delivery_flow_strength(merged["delivery_percentile"])
+    merged["vadm"] = compute_vadm(merged["pe_percentile"], merged["delivery_flow"])
+    n_bad_delivery = deliv_df.attrs.get("n_impossible_delivery_pct_rows_removed", 0)
+
+    # VADM IS the operational signal now (quadrant is the visual 4-state view
+    # of the same underlying PE-percentile + delivery-flow combination)
+    merged = generate_quadrant_signals(
+        merged,
+        vadm_buy_threshold=params["vadm_buy_threshold"],
+        vadm_sell_threshold=params["vadm_sell_threshold"],
+    )
+    merged = generate_quadrant_ablation_signals(
+        merged,
+        cheap_pctile=params["cheap_pctile"],
+        delivery_pctile_midpoint=0.5,
+    )
 
     results = run_backtest(merged, holding_periods=params["holding_periods"])
     ablation_results = run_ablation_backtest(merged, holding_periods=params["holding_periods"])
-    return {"annual": annual, "merged": merged, "results": results, "ablation_results": ablation_results}, None
+
+    h3_model, h3_err = test_h3_interaction(merged, holding_period=params.get("h3_holding_period", 63))
+    return {
+        "annual": annual, "merged": merged, "results": results,
+        "ablation_results": ablation_results,
+        "h3_model": h3_model, "h3_err": h3_err,
+        "n_bad_delivery": n_bad_delivery,
+    }, None
 
 
 def render_stock_chart(ticker, merged):
     if go is None: return
     fig = go.Figure()
-    
-    # 1. Price Line
     fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="PRICE", yaxis="y",
-                             line=dict(width=1.5, color="#FFFFFF")))
-                             
-    # 2. VADM Buy/Sell Signals (Using New Quadrant Logic)
-    # Buy only when it's Cheap AND Smart Money is buying (Value Confirmation)
-    # 2. VADM Buy/Sell Signals (Filtered for FIRST ENTRY only)
-    
-    # Create boolean series for being in the quadrant
-    in_buy_zone = merged["quadrant"] == "Value Confirmation"
-    in_sell_zone = merged["quadrant"] == "Reversal/De-rating"
-    
-    # Shift by 1 day to see what the state was YESTERDAY
-    # True today AND False yesterday = Fresh Entry!
-    fresh_buy_signals = in_buy_zone & (~in_buy_zone.shift(1).fillna(False))
-    fresh_sell_signals = in_sell_zone & (~in_sell_zone.shift(1).fillna(False))
-    
-    # Filter the dataframe using these new fresh signals
-    buys = merged[fresh_buy_signals]
-    sells = merged[fresh_sell_signals]
-    
-    fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="VADM BUY",
-                              marker=dict(color="#00FF00", size=10, symbol="triangle-up",
-                                          line=dict(color="#000000", width=1))))
-    fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="VADM SELL",
-                              marker=dict(color="#FF0000", size=10, symbol="triangle-down",
-                                          line=dict(color="#000000", width=1))))
-                                          
-    # 3. PE Rank Line
+                             line=dict(width=1.5, color="#E6EDF3")))
+    buys = merged[merged["heavy_buying"]]
+    sells = merged[merged["heavy_selling"]]
+    fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="HEAVY BUY",
+                              marker=dict(color="#3FB950", size=8, symbol="triangle-up",
+                                          line=dict(color="#0B0E14", width=1))))
+    fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="HEAVY SELL",
+                              marker=dict(color="#F85149", size=8, symbol="triangle-down",
+                                          line=dict(color="#0B0E14", width=1))))
     fig.add_trace(go.Scatter(x=merged.index, y=merged["pe_percentile"] * 100, name="PE %RANK",
-                              yaxis="y2", line=dict(width=1, dash="dot", color="#FFB000")))
-                              
-    # 4. Proof that HTTP Delivery Data is coming (Light blue line)
-    if "delivery_pct" in merged.columns and not merged["delivery_pct"].isna().all():
-        fig.add_trace(go.Scatter(x=merged.index, y=merged["delivery_pct"], name="DELIVERY %",
-                                  yaxis="y2", line=dict(width=1, color="#00FFFF", dash="dot"), opacity=0.3))
-
+                              yaxis="y2", line=dict(width=1, dash="dot", color="#D4A017")))
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor='#000000',
-        plot_bgcolor='#000000',
-        title=dict(text=f"> {ticker} : SIGNAL ANALYSIS", font=dict(size=14, color="#FFB000", family="Space Mono, monospace")),
+        paper_bgcolor='#0B0E14',
+        plot_bgcolor='#0B0E14',
+        title=dict(text=f"> {ticker} : SIGNAL ANALYSIS", font=dict(size=14, color="#D4A017", family="IBM Plex Mono, monospace")),
         height=500,
-        yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor="#222222", zeroline=False, tickfont=dict(color="#FFFFFF", family="Space Mono, monospace")),
-        yaxis2=dict(title="PERCENTILE / DELIVERY", overlaying="y", side="right", range=[0, 100], showgrid=False, tickfont=dict(color="#FFB000", family="Space Mono, monospace")),
-        xaxis=dict(tickfont=dict(color="#FFFFFF", family="Space Mono, monospace"), gridcolor="#222222"),
-        legend=dict(orientation="h", y=1.05, x=0, bgcolor='#000000', font=dict(size=11, color="#FFFFFF", family="Space Mono, monospace")),
+        yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor="#1C212B", zeroline=False, tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace")),
+        yaxis2=dict(title="PE PERCENTILE", overlaying="y", side="right", range=[0, 100], showgrid=False, tickfont=dict(color="#D4A017", family="IBM Plex Mono, monospace")),
+        xaxis=dict(tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace"), gridcolor="#1C212B"),
+        legend=dict(orientation="h", y=1.05, x=0, bgcolor='#0B0E14', font=dict(size=11, color="#E6EDF3", family="IBM Plex Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
         hovermode="x unified"
     )
@@ -260,9 +260,9 @@ def render_stock_chart(ticker, merged):
 
 def render_ablation_table(ablation_results, side):
     labels = {
-        f"{side}_pe_only": "VAL ONLY",
-        f"{side}_technical_only": "TECH ONLY",
-        f"{side}_combined": "COMBINED",
+        f"{side}_pe_only": "PE ONLY (H1)",
+        f"{side}_delivery_only": "DELIVERY ONLY (H2)",
+        f"{side}_combined": "COMBINED / VADM (H3)",
     }
     rows = []
     for key, label in labels.items():
@@ -290,10 +290,10 @@ def render_ablation_table(ablation_results, side):
 
 
 QUADRANT_COLORS = {
-    "Value Confirmation": "#00FF00",
-    "Reversal/De-rating": "#FF0000",
-    "Momentum without Margin of Safety": "#FFB000",
-    "Value Trap Warning": "#888888",
+    "Value Confirmation": "#3FB950",
+    "Reversal/De-rating": "#F85149",
+    "Momentum without Margin of Safety": "#D4A017",
+    "Value Trap Warning": "#6E7681",
 }
 
 
@@ -327,20 +327,20 @@ def render_quadrant_chart(merged, quadrant_col="quadrant"):
     fig.add_trace(go.Scatter(
         x=last["pe_percentile"] * 100, y=last["delivery_percentile"] * 100,
         mode="markers", name="LATEST",
-        marker=dict(color="#FFFFFF", size=14, symbol="star", line=dict(color="#000000", width=1)),
+        marker=dict(color="#E6EDF3", size=14, symbol="star", line=dict(color="#0B0E14", width=1)),
     ))
 
-    fig.add_vline(x=50, line_dash="dot", line_color="#555555")
-    fig.add_hline(y=50, line_dash="dot", line_color="#555555")
+    fig.add_vline(x=50, line_dash="dot", line_color="#30363D")
+    fig.add_hline(y=50, line_dash="dot", line_color="#30363D")
 
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="#000000", plot_bgcolor="#000000",
-        title=dict(text="> VALUATION x DELIVERY QUADRANT", font=dict(size=14, color="#FFB000", family="Space Mono, monospace")),
+        paper_bgcolor="#0B0E14", plot_bgcolor="#0B0E14",
+        title=dict(text="> VALUATION x DELIVERY QUADRANT", font=dict(size=14, color="#D4A017", family="IBM Plex Mono, monospace")),
         height=480,
-        xaxis=dict(title="PE PERCENTILE (own history) -->", range=[0, 100], gridcolor="#222222", tickfont=dict(color="#FFFFFF", family="Space Mono, monospace")),
-        yaxis=dict(title="DELIVERY PERCENTILE (own history) -->", range=[0, 100], gridcolor="#222222", tickfont=dict(color="#FFFFFF", family="Space Mono, monospace")),
-        legend=dict(orientation="h", y=-0.15, font=dict(size=10, color="#FFFFFF", family="Space Mono, monospace")),
+        xaxis=dict(title="PE PERCENTILE (own history) -->", range=[0, 100], gridcolor="#1C212B", tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace")),
+        yaxis=dict(title="DELIVERY PERCENTILE (own history) -->", range=[0, 100], gridcolor="#1C212B", tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace")),
+        legend=dict(orientation="h", y=-0.15, font=dict(size=10, color="#E6EDF3", family="IBM Plex Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -354,7 +354,7 @@ def render_quadrant_chart(merged, quadrant_col="quadrant"):
 def render_hypothesis_panel():
     """Static display of H1-H4 so they're visible to the user/report reviewer,
     not just buried in code comments."""
-    st.markdown("<span style='color:#FFB000; font-family:monospace; border-bottom: 1px solid #FFB000;'>[ RESEARCH HYPOTHESES ]</span>", unsafe_allow_html=True)
+    st.markdown("<span style='color:#D4A017; font-family:monospace; border-bottom: 1px solid #D4A017;'>[ RESEARCH HYPOTHESES ]</span>", unsafe_allow_html=True)
     hyps = [
         ("H1", "Main effect - Valuation (P/E)",
          "Low P/E is associated with higher average forward return than high P/E."),
@@ -373,17 +373,60 @@ def render_hypothesis_panel():
     for tag, title, text in hyps:
         st.markdown(
             f"<div style='margin-bottom:10px; font-family:monospace; font-size:13px;'>"
-            f"<span style='color:#00FF00; font-weight:700;'>{tag}</span> "
-            f"<span style='color:#FFB000;'>[{title}]</span><br>"
-            f"<span style='color:#CCCCCC;'>{text}</span></div>",
+            f"<span style='color:#3FB950; font-weight:700;'>{tag}</span> "
+            f"<span style='color:#D4A017;'>[{title}]</span><br>"
+            f"<span style='color:#ADB7C4;'>{text}</span></div>",
             unsafe_allow_html=True,
         )
     st.caption(
-        "NOTE: H3's formal test needs a regression with an explicit interaction "
-        "term (forward_return ~ pe_percentile + delivery_flow + pe_percentile*"
-        "delivery_flow) -- not yet implemented. The quadrant chart above is a "
-        "visual/exploratory view of H3, not the statistical test itself."
+        "H3's formal test is the interaction regression below (forward_return ~ "
+        "pe_percentile + delivery_flow + pe_percentile*delivery_flow). The "
+        "quadrant chart above is a visual/exploratory view of the same idea, "
+        "not a substitute for the regression."
     )
+
+
+def render_h3_results(h3_model, h3_err, holding_period):
+    st.markdown("<span style='color:#D4A017; font-family:monospace; border-bottom: 1px solid #D4A017;'>[ H3 INTERACTION REGRESSION ]</span>", unsafe_allow_html=True)
+    st.caption(f"forward_return ({holding_period}d) ~ pe_percentile + delivery_flow + pe_percentile*delivery_flow")
+
+    if h3_err:
+        st.warning(f"[H3] {h3_err}")
+        return
+
+    params_ = h3_model.params
+    pvalues = h3_model.pvalues
+    bse = h3_model.bse
+
+    rows = []
+    for name in ["const", "pe_percentile", "delivery_flow", "interaction"]:
+        if name not in params_.index:
+            continue
+        p = pvalues[name]
+        rows.append({
+            "TERM": name.upper(),
+            "COEF": f"{params_[name]:+.4f}",
+            "STD ERR": f"{bse[name]:.4f}",
+            "P-VALUE": "<0.001" if p < 0.001 else f"{p:.4f}",
+            "SIGNIFICANT (5%)": "YES" if p < 0.05 else "no",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    interaction_p = pvalues.get("interaction", None)
+    n_obs = int(h3_model.nobs)
+    r2 = h3_model.rsquared
+    if interaction_p is not None:
+        if interaction_p < 0.05:
+            verdict = "SUPPORTS H3 -- interaction term IS statistically significant. Delivery flow's predictive effect on forward return genuinely differs by PE regime."
+            color = "#3FB950"
+        else:
+            verdict = "DOES NOT SUPPORT H3 at 5% level -- interaction term is not statistically significant with this sample. H1/H2 may still hold individually; the interaction itself isn't confirmed here."
+            color = "#F85149"
+        st.markdown(
+            f"<div style='font-family:monospace; font-size:13px; color:{color}; margin-top:8px;'>{verdict}</div>",
+            unsafe_allow_html=True,
+        )
+    st.caption(f"n = {n_obs} observations, R-squared = {r2:.4f}. Note: this is a single-stock regression -- for a real conclusion on H3, run this across your full stock universe and look at how consistently the interaction term comes out significant, not just one stock.")
 
 
 def format_terminal_df(df):
@@ -410,8 +453,56 @@ def format_terminal_df(df):
         out = out.drop(columns=["note"])
     return out
 
+ACCESS_CODE = "Navi@123"
+
+BOOT_SEQUENCE = [
+    "AUTHENTICATING OPERATOR...",
+    "CALIBRATING VALUATION ENGINE...",
+    "SYNCING DELIVERY FLOW DATA...",
+    "COMPILING QUADRANT MATRIX...",
+    "WELCOME BACK, NAVEEN.",
+]
+
+
+def check_access() -> bool:
+    """Simple session-gated password check with a short boot-sequence
+    animation on success. Not real security (client-side, single shared
+    password) -- just keeps the terminal from being casually stumbled into."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown(
+        f"<div style='text-align:center; margin-top:12vh;'>"
+        f"<span style='color:{ACCENT}; font-family:monospace; font-size:1.4rem; letter-spacing:0.15em;'>[ {APP_NAME} ]</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        code = st.text_input("ACCESS CODE", type="password", key="access_code_input", label_visibility="collapsed", placeholder="ACCESS CODE")
+        submit = st.button("AUTHENTICATE", use_container_width=True)
+
+        if submit:
+            if code == ACCESS_CODE:
+                st.session_state["authenticated"] = True
+                placeholder = st.empty()
+                for line in BOOT_SEQUENCE:
+                    placeholder.markdown(
+                        f"<div style='font-family:monospace; color:{GREEN}; font-size:0.95rem; text-align:center;'>{line}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    time.sleep(0.45)
+                st.rerun()
+            else:
+                st.markdown(
+                    f"<div style='color:{RED}; font-family:monospace; text-align:center; font-size:0.85rem;'>[ACCESS DENIED] Incorrect code.</div>",
+                    unsafe_allow_html=True,
+                )
+    return False
+
+
 def main():
-    st.markdown("<h3 style='color: #FFB000; font-family: monospace; font-size: 1.2rem;'>[ BLOOMBERG ] SYSTEMATIC QUANT FRAMEWORK</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='color: {ACCENT}; font-family: monospace; font-size: 1.2rem; letter-spacing:0.08em;'>[ {APP_NAME} ] VALUATION x DELIVERY SIGNAL ENGINE</h3>", unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns([3, 3, 2, 2])
 
@@ -426,15 +517,16 @@ def main():
     with c3:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         with st.popover("[ STRAT PARAMS ]", use_container_width=True):
-            st.markdown("<span style='color:#FFB000'>VALUATION BOUNDS</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#D4A017'>VALUATION BOUNDS</span>", unsafe_allow_html=True)
             cheap_pctile = st.slider("CHEAP PE %", 0.05, 0.50, 0.20, 0.05)
             expensive_pctile = st.slider("EXPENSIVE PE %", 0.50, 0.95, 0.80, 0.05)
 
-            st.markdown("<span style='color:#FFB000'>TECHNICAL TRIGGERS</span>", unsafe_allow_html=True)
-            volume_z_threshold = st.slider("VOL SPIKE (Z)", 0.5, 4.0, 1.5, 0.1)
-            require_momentum_confirmation = st.checkbox("REQUIRE MOMENTUM", value=True)
+            st.markdown("<span style='color:#D4A017'>VADM SIGNAL (operational trigger)</span>", unsafe_allow_html=True)
+            vadm_buy_threshold = st.slider("VADM BUY THRESHOLD", 0.05, 0.80, 0.15, 0.05)
+            vadm_sell_threshold = st.slider("VADM SELL THRESHOLD", 0.05, 0.80, 0.15, 0.05)
+            h3_holding_period = st.selectbox("H3 REGRESSION HOLDING (DAYS)", [21, 63, 126, 252], index=1)
 
-            st.markdown("<span style='color:#FFB000'>ADVANCED ENGINE</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#D4A017'>ADVANCED ENGINE</span>", unsafe_allow_html=True)
             volume_window = st.number_input("VOL WINDOW", value=20)
             momentum_window = st.number_input("MOM WINDOW", value=10)
             rsi_window = st.number_input("RSI WINDOW", value=14)
@@ -454,8 +546,9 @@ def main():
 
     params = dict(
         cheap_pctile=cheap_pctile, expensive_pctile=expensive_pctile,
-        volume_z_threshold=volume_z_threshold, volume_window=volume_window,
-        require_momentum_confirmation=require_momentum_confirmation,
+        vadm_buy_threshold=vadm_buy_threshold, vadm_sell_threshold=vadm_sell_threshold,
+        h3_holding_period=h3_holding_period,
+        volume_window=volume_window,
         filing_lag_days=filing_lag_days, pe_min_periods=pe_min_periods,
         momentum_window=momentum_window, rsi_window=rsi_window,
         dma_short=dma_short, dma_long=dma_long,
@@ -465,7 +558,7 @@ def main():
     st.markdown("<hr>", unsafe_allow_html=True)
 
     if not ticker or xlsx_file is None:
-        st.markdown("<span style='color:#00FF00; font-family:monospace;'>[SYSTEM] AWAITING INPUTS...</span>", unsafe_allow_html=True)
+        st.markdown("<span style='color:#3FB950; font-family:monospace;'>[SYSTEM] AWAITING INPUTS...</span>", unsafe_allow_html=True)
         return
 
     if run_btn:
@@ -490,27 +583,30 @@ def main():
 
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("<span style='color:#00FF00; font-family:monospace; border-bottom: 1px solid #00FF00;'>[ BUY ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#3FB950; font-family:monospace; border-bottom: 1px solid #3FB950;'>[ BUY ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
             st.dataframe(format_terminal_df(result["results"]["buy_signal_eval"]), use_container_width=True, hide_index=True)
         with c2:
-            st.markdown("<span style='color:#FF0000; font-family:monospace; border-bottom: 1px solid #FF0000;'>[ SELL ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#F85149; font-family:monospace; border-bottom: 1px solid #F85149;'>[ SELL ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
             st.dataframe(format_terminal_df(result["results"]["sell_signal_eval"]), use_container_width=True, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         a1, a2 = st.columns(2)
         with a1:
-            st.markdown("<span style='color:#FFB000; font-family:monospace;'>BUY ALPHA ATTRIBUTION (63D)</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#D4A017; font-family:monospace;'>BUY ALPHA ATTRIBUTION (63D)</span>", unsafe_allow_html=True)
             render_ablation_table(result["ablation_results"], "buy")
         with a2:
-            st.markdown("<span style='color:#FFB000; font-family:monospace;'>SELL ALPHA ATTRIBUTION (63D)</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color:#D4A017; font-family:monospace;'>SELL ALPHA ATTRIBUTION (63D)</span>", unsafe_allow_html=True)
             render_ablation_table(result["ablation_results"], "sell")
 
         st.markdown("<br><hr>", unsafe_allow_html=True)
         render_quadrant_chart(merged)
         st.markdown("<br>", unsafe_allow_html=True)
+        render_h3_results(result["h3_model"], result["h3_err"], params["h3_holding_period"])
+        st.markdown("<br>", unsafe_allow_html=True)
         render_hypothesis_panel()
 
 
 if __name__ == "__main__":
-    main()
+    if check_access():
+        main()
