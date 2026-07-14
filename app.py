@@ -211,9 +211,20 @@ def render_stock_chart(ticker, merged):
                              
     # 2. VADM Buy/Sell Signals (Using New Quadrant Logic)
     # Buy only when it's Cheap AND Smart Money is buying (Value Confirmation)
-    buys = merged[merged["quadrant"] == "Value Confirmation"]
-    # Sell when it's Expensive AND Smart Money is selling (Reversal/De-rating)
-    sells = merged[merged["quadrant"] == "Reversal/De-rating"]
+    # 2. VADM Buy/Sell Signals (Filtered for FIRST ENTRY only)
+    
+    # Create boolean series for being in the quadrant
+    in_buy_zone = merged["quadrant"] == "Value Confirmation"
+    in_sell_zone = merged["quadrant"] == "Reversal/De-rating"
+    
+    # Shift by 1 day to see what the state was YESTERDAY
+    # True today AND False yesterday = Fresh Entry!
+    fresh_buy_signals = in_buy_zone & (~in_buy_zone.shift(1).fillna(False))
+    fresh_sell_signals = in_sell_zone & (~in_sell_zone.shift(1).fillna(False))
+    
+    # Filter the dataframe using these new fresh signals
+    buys = merged[fresh_buy_signals]
+    sells = merged[fresh_sell_signals]
     
     fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="VADM BUY",
                               marker=dict(color="#00FF00", size=10, symbol="triangle-up",
