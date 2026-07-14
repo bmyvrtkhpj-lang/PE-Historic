@@ -204,18 +204,33 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
 def render_stock_chart(ticker, merged):
     if go is None: return
     fig = go.Figure()
+    
+    # 1. Price Line
     fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="PRICE", yaxis="y",
                              line=dict(width=1.5, color="#FFFFFF")))
-    buys = merged[merged["heavy_buying"]]
-    sells = merged[merged["heavy_selling"]]
-    fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="HEAVY BUY",
-                              marker=dict(color="#00FF00", size=8, symbol="triangle-up",
+                             
+    # 2. VADM Buy/Sell Signals (Using New Quadrant Logic)
+    # Buy only when it's Cheap AND Smart Money is buying (Value Confirmation)
+    buys = merged[merged["quadrant"] == "Value Confirmation"]
+    # Sell when it's Expensive AND Smart Money is selling (Reversal/De-rating)
+    sells = merged[merged["quadrant"] == "Reversal/De-rating"]
+    
+    fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="VADM BUY",
+                              marker=dict(color="#00FF00", size=10, symbol="triangle-up",
                                           line=dict(color="#000000", width=1))))
-    fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="HEAVY SELL",
-                              marker=dict(color="#FF0000", size=8, symbol="triangle-down",
+    fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="VADM SELL",
+                              marker=dict(color="#FF0000", size=10, symbol="triangle-down",
                                           line=dict(color="#000000", width=1))))
+                                          
+    # 3. PE Rank Line
     fig.add_trace(go.Scatter(x=merged.index, y=merged["pe_percentile"] * 100, name="PE %RANK",
                               yaxis="y2", line=dict(width=1, dash="dot", color="#FFB000")))
+                              
+    # 4. Proof that HTTP Delivery Data is coming (Light blue line)
+    if "delivery_pct" in merged.columns and not merged["delivery_pct"].isna().all():
+        fig.add_trace(go.Scatter(x=merged.index, y=merged["delivery_pct"], name="DELIVERY %",
+                                  yaxis="y2", line=dict(width=1, color="#00FFFF", dash="dot"), opacity=0.3))
+
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor='#000000',
@@ -223,7 +238,7 @@ def render_stock_chart(ticker, merged):
         title=dict(text=f"> {ticker} : SIGNAL ANALYSIS", font=dict(size=14, color="#FFB000", family="Space Mono, monospace")),
         height=500,
         yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor="#222222", zeroline=False, tickfont=dict(color="#FFFFFF", family="Space Mono, monospace")),
-        yaxis2=dict(title="PE PERCENTILE", overlaying="y", side="right", range=[0, 100], showgrid=False, tickfont=dict(color="#FFB000", family="Space Mono, monospace")),
+        yaxis2=dict(title="PERCENTILE / DELIVERY", overlaying="y", side="right", range=[0, 100], showgrid=False, tickfont=dict(color="#FFB000", family="Space Mono, monospace")),
         xaxis=dict(tickfont=dict(color="#FFFFFF", family="Space Mono, monospace"), gridcolor="#222222"),
         legend=dict(orientation="h", y=1.05, x=0, bgcolor='#000000', font=dict(size=11, color="#FFFFFF", family="Space Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
