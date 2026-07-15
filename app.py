@@ -256,7 +256,6 @@ def render_stock_chart(ticker, merged):
     fig = go.Figure()
 
     # 1. PROFESSIONAL CANDLESTICK CHART
-    # Check if OHLC data exists, fallback to line if it doesn't
     if "open" in merged.columns:
         fig.add_trace(go.Candlestick(
             x=merged.index,
@@ -269,55 +268,50 @@ def render_stock_chart(ticker, merged):
     else:
         fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="PRICE", line=dict(color="#E6EDF3")))
 
-    # 2. EXACT ENTRY & EXIT LOGIC (Edge Detection / First Day Only)
-    is_buy_zone = merged["quadrant"] == "Value Confirmation"
-    is_sell_zone = merged["quadrant"] == "Reversal/De-rating"
-    is_value_trap = merged["quadrant"] == "Value Trap Warning"
+    # 2. EXACT ENTRY & EXIT LOGIC (Using Sir's signal_onsets to filter noise)
+    from vadm import signal_onsets
     
-    # Fresh Entries (Kal nahi tha, aaj hai)
-    entry_long = is_buy_zone & (~is_buy_zone.shift(1).fillna(False))
-    entry_short = is_sell_zone & (~is_sell_zone.shift(1).fillna(False))
+    # Use the actual VADM signals, filtered for the FIRST day of the episode
+    entry_long = signal_onsets(merged["heavy_buying"])
+    entry_short = signal_onsets(merged["heavy_selling"])
     
-    # Exits (Long exit kab karein? Jab stock Value Trap ya Reversal mein gir jaye)
-    exit_zone = is_sell_zone | is_value_trap
-    exit_long = exit_zone & (~exit_zone.shift(1).fillna(False)) & is_buy_zone.shift(1).fillna(False).rolling(30).max().astype(bool) # Exit if we were recently long
+    # Exit Long: When stock drops into Value Trap or Reversal regimes
+    is_bad_zone = merged["quadrant"].isin(["Value Trap Warning", "Reversal/De-rating"])
+    exit_long = signal_onsets(is_bad_zone)
 
     df_entry_long = merged[entry_long]
     df_entry_short = merged[entry_short]
     df_exit_long = merged[exit_long]
 
-    # 3. PLOT ENTRY / EXIT MARKERS WITH TEXT ON EXACT CANDLES
+    # 3. PLOT MARKERS (Using HOVERTEXT to keep the chart clean)
     # Entry Long (Below Candle)
     if not df_entry_long.empty:
         y_pos = df_entry_long["low"] * 0.95 if "low" in df_entry_long else df_entry_long["price"] * 0.95
         fig.add_trace(go.Scatter(
-            x=df_entry_long.index, y=y_pos, mode="markers+text", name="ENTRY LONG",
-            text="⬆ ENTRY LONG", textposition="bottom center",
-            marker=dict(color="#3FB950", size=12, symbol="triangle-up", line=dict(color="#FFFFFF", width=1)),
-            textfont=dict(color="#3FB950", size=11, family="IBM Plex Mono", weight="bold")
+            x=df_entry_long.index, y=y_pos, mode="markers", name="ENTRY LONG",
+            hovertext="⬆ ENTRY LONG (Value Confirmation)", hoverinfo="text+x",
+            marker=dict(color="#3FB950", size=10, symbol="triangle-up", line=dict(color="#0B0E14", width=1))
         ))
 
     # Entry Short (Above Candle)
     if not df_entry_short.empty:
         y_pos = df_entry_short["high"] * 1.05 if "high" in df_entry_short else df_entry_short["price"] * 1.05
         fig.add_trace(go.Scatter(
-            x=df_entry_short.index, y=y_pos, mode="markers+text", name="ENTRY SHORT",
-            text="⬇ ENTRY SHORT", textposition="top center",
-            marker=dict(color="#F85149", size=12, symbol="triangle-down", line=dict(color="#FFFFFF", width=1)),
-            textfont=dict(color="#F85149", size=11, family="IBM Plex Mono", weight="bold")
+            x=df_entry_short.index, y=y_pos, mode="markers", name="ENTRY SHORT",
+            hovertext="⬇ ENTRY SHORT (Reversal/De-rating)", hoverinfo="text+x",
+            marker=dict(color="#F85149", size=10, symbol="triangle-down", line=dict(color="#0B0E14", width=1))
         ))
         
     # Exit Long (Above Candle)
     if not df_exit_long.empty:
         y_pos = df_exit_long["high"] * 1.05 if "high" in df_exit_long else df_exit_long["price"] * 1.05
         fig.add_trace(go.Scatter(
-            x=df_exit_long.index, y=y_pos, mode="markers+text", name="EXIT LONG",
-            text="✖ EXIT LONG", textposition="top center",
-            marker=dict(color="#D4A017", size=10, symbol="x", line=dict(color="#FFFFFF", width=1)),
-            textfont=dict(color="#D4A017", size=10, family="IBM Plex Mono")
+            x=df_exit_long.index, y=y_pos, mode="markers", name="EXIT LONG",
+            hovertext="✖ EXIT (Trap/Reversal Zone)", hoverinfo="text+x",
+            marker=dict(color="#D4A017", size=9, symbol="x", line=dict(color="#0B0E14", width=1))
         ))
 
-    # Remove Range Slider from bottom (Makes chart look much cleaner)
+    # Remove Range Slider (Makes chart cleaner)
     fig.update_layout(xaxis_rangeslider_visible=False)
 
     fig.update_layout(
@@ -325,16 +319,14 @@ def render_stock_chart(ticker, merged):
         paper_bgcolor='#0B0E14',
         plot_bgcolor='#0B0E14',
         title=dict(text=f"> {ticker} : CANDLESTICK SIGNAL ANALYSIS", font=dict(size=14, color="#D4A017", family="IBM Plex Mono, monospace")),
-        height=650, # Increased height for better candle visibility
+        height=650,
         yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor="#1C212B", zeroline=False, tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace")),
         xaxis=dict(tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace"), gridcolor="#1C212B"),
         legend=dict(orientation="h", y=1.05, x=0, bgcolor='#0B0E14', font=dict(size=11, color="#E6EDF3", family="IBM Plex Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
         hovermode="x unified"
     )
-    st.plotly_chart(fig, use_container_width=True)
-
-def render_ablation_table(ablation_results, side):
+    st.plotly_chart(fig, use_container_width=True)def render_ablation_table(ablation_results, side):
     labels = {
         f"{side}_pe_only": "PE ONLY (H1)",
         f"{side}_delivery_only": "DELIVERY ONLY (H2)",
