@@ -18,7 +18,7 @@ except ImportError:
 from data_pipeline import extract_annual_fundamentals, build_step_function_pe, apply_corporate_action_exclusions, fetch_price_volume, fetch_eod2_delivery_data
 from technical_indicators import add_all_technical_indicators
 from pe_signal import pe_percentile_rank, delivery_percentile_rank
-from vadm import delivery_flow_strength, compute_vadm, classify_quadrant, generate_quadrant_signals, generate_quadrant_ablation_signals
+from vadm import delivery_flow_strength, compute_vadm, classify_quadrant, generate_quadrant_signals, generate_quadrant_ablation_signals, signal_onsets
 from backtest import run_backtest, run_ablation_backtest, test_h3_interaction
 
 
@@ -222,8 +222,24 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         delivery_pctile_midpoint=0.5,
     )
 
-    results = run_backtest(merged, holding_periods=params["holding_periods"])
-    ablation_results = run_ablation_backtest(merged, holding_periods=params["holding_periods"])
+    # --- Statistical evaluation uses EPISODE ONSETS, not raw signal-days ---
+    # Confirmed on real data: a persistent regime can hold for weeks (one
+    # sell episode ran 29 consecutive days), and counting every day as an
+    # independent observation inflates apparent significance. The CHART
+    # still shows every day (merged, unchanged); backtest/ablation/stats
+    # use eval_df, where each signal column is collapsed to onset-only.
+    eval_df = merged.copy()
+    for col in ["heavy_buying", "heavy_selling", "buy_pe_only", "buy_delivery_only",
+                "buy_combined", "sell_pe_only", "sell_delivery_only", "sell_combined"]:
+        eval_df[col] = signal_onsets(merged[col])
+
+    n_buy_episodes = int(eval_df["heavy_buying"].sum())
+    n_sell_episodes = int(eval_df["heavy_selling"].sum())
+    n_buy_raw_days = int(merged["heavy_buying"].sum())
+    n_sell_raw_days = int(merged["heavy_selling"].sum())
+
+    results = run_backtest(eval_df, holding_periods=params["holding_periods"])
+    ablation_results = run_ablation_backtest(eval_df, holding_periods=params["holding_periods"])
 
     h3_model, h3_err = test_h3_interaction(merged, holding_period=params.get("h3_holding_period", 63))
     return {
@@ -231,6 +247,8 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         "ablation_results": ablation_results,
         "h3_model": h3_model, "h3_err": h3_err,
         "n_bad_delivery": n_bad_delivery,
+        "n_buy_episodes": n_buy_episodes, "n_sell_episodes": n_sell_episodes,
+        "n_buy_raw_days": n_buy_raw_days, "n_sell_raw_days": n_sell_raw_days,
     }, None
 
 
@@ -583,8 +601,9 @@ def main():
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("TRADING DAYS", len(merged))
         d2.metric("VALID PE ARRAY", int(merged["pe"].notna().sum()))
-        d3.metric("HEAVY BUY SIG", int(merged['heavy_buying'].sum()))
-        d4.metric("HEAVY SELL SIG", int(merged['heavy_selling'].sum()))
+        d3.metric("HEAVY BUY SIG", f"{result['n_buy_raw_days']} days / {result['n_buy_episodes']} episodes")
+        d4.metric("HEAVY SELL SIG", f"{result['n_sell_raw_days']} days / {result['n_sell_episodes']} episodes")
+        st.caption("Stats/backtest below use EPISODES (independent onsets) -- a persistent multi-day regime is one episode, not one observation per day. Chart below still marks every day.")
 
         st.markdown("<br>", unsafe_allow_html=True)
         render_stock_chart(ticker, merged)
