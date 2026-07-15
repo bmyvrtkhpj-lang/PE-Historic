@@ -33,6 +33,8 @@ only covers the composite score + visual classification.
 import numpy as np
 import pandas as pd
 
+from pe_signal import expanding_percentile_rank
+
 
 def delivery_flow_strength(delivery_percentile: pd.Series, midpoint: float = 0.5) -> pd.Series:
     """
@@ -108,18 +110,31 @@ def classify_quadrant(pe_percentile: pd.Series,
     return result
 
 
-def generate_quadrant_signals(df: pd.DataFrame, vadm_buy_threshold: float = 0.15, vadm_sell_threshold: float = 0.15) -> pd.DataFrame:
+def generate_quadrant_signals(df: pd.DataFrame, vadm_buy_pctile: float = 0.90, vadm_sell_pctile: float = 0.10) -> pd.DataFrame:
     """
-    Replaces the old volume+momentum based generate_signals(). VADM is now
-    THE operational signal -- the quadrant is the visual/conceptual 4-state
-    classification, VADM is the continuous score actually thresholded here.
+    Replaces the old volume+momentum based generate_signals() AND the old
+    fixed-threshold VADM version. VADM is THE operational signal, but
+    thresholded by its OWN PERCENTILE RANK, not a fixed absolute number.
+
+    WHY: tested on real HDFC Bank data and found VADM's own distribution is
+    skewed (median ~0.22, not centered on 0) -- a fixed threshold like 0.15
+    sat close to the MEDIAN, so "heavy_buying" fired on >55% of days. That
+    defeats the entire point of "heavy" meaning rare/extreme. Using VADM's
+    own expanding percentile rank (same methodology as PE and delivery
+    percentile elsewhere in this project) makes "heavy" genuinely mean
+    "top/bottom X% of this stock's own VADM history" -- adapts correctly
+    regardless of a stock's own VADM distribution shape.
+
+    vadm_buy_pctile=0.90: buy signal = VADM in the top 10% of its own history.
+    vadm_sell_pctile=0.10: sell signal = VADM in the bottom 10% of its own history.
 
     df must already contain 'vadm' (from compute_vadm).
-    Adds: heavy_buying (vadm > +threshold), heavy_selling (vadm < -threshold).
+    Adds: vadm_percentile, heavy_buying, heavy_selling.
     """
     out = df.copy()
-    out["heavy_buying"] = (out["vadm"] > vadm_buy_threshold).fillna(False)
-    out["heavy_selling"] = (out["vadm"] < -vadm_sell_threshold).fillna(False)
+    out["vadm_percentile"] = expanding_percentile_rank(out["vadm"])
+    out["heavy_buying"] = (out["vadm_percentile"] >= vadm_buy_pctile).fillna(False)
+    out["heavy_selling"] = (out["vadm_percentile"] <= vadm_sell_pctile).fillna(False)
     return out
 
 
