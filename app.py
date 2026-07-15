@@ -168,11 +168,21 @@ def cached_price_volume(ticker, start, end):
 
 def run_single_stock(ticker, xlsx_file, exclusions_text, params):
     annual = extract_annual_fundamentals(xlsx_file)
+
+    # --- Single data fetch: EOD2 gives price + volume + delivery together ---
+    # (yfinance removed from the primary path -- it was hitting
+    # YFRateLimitError on Streamlit Cloud's shared IPs, a known problem with
+    # Yahoo Finance blocking cloud-hosted scrapers. EOD2's data is static
+    # files served over GitHub's CDN, no rate limiting like this.)
+    nse_symbol = ticker.replace(".NS", "").replace(".BO", "")
+    eod2_df, eod2_err = fetch_eod2_delivery_data(nse_symbol)
+    if eod2_err:
+        return None, f"Price/delivery data unavailable for {nse_symbol}: {eod2_err}"
+
     price_start = params["price_start"]
-    price_end = pd.Timestamp.today().strftime("%Y-%m-%d")
-    price_df = cached_price_volume(ticker, price_start, price_end)
+    price_df = eod2_df.loc[eod2_df.index >= price_start, ["price", "volume"]]
     if price_df.empty:
-        return None, f"No data returned for {ticker}."
+        return None, f"No price data for {nse_symbol} from {price_start} onward."
 
     pe_df = build_step_function_pe(annual, price_df["price"], filing_lag_days=params["filing_lag_days"])
     exclusions = parse_exclusions(exclusions_text)
@@ -190,17 +200,14 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
     merged["pe_percentile"] = pe_percentile_rank(merged["pe"], min_periods=params["pe_min_periods"])
 
     # --- Delivery / VADM / Quadrant layer (sir's redesigned framework) ---
-    nse_symbol = ticker.replace(".NS", "").replace(".BO", "")
-    deliv_df, deliv_err = fetch_eod2_delivery_data(nse_symbol)
-    if deliv_err:
-        return None, f"Delivery data unavailable for {nse_symbol}: {deliv_err}"
-
-    merged = merged.join(deliv_df[["delivery_pct"]], how="left")
+    # Same eod2_df already fetched above -- just join the delivery_pct column,
+    # no second network call needed.
+    merged = merged.join(eod2_df[["delivery_pct"]], how="left")
     merged["delivery_percentile"] = delivery_percentile_rank(merged["delivery_pct"], min_periods=params["pe_min_periods"])
     merged["quadrant"] = classify_quadrant(merged["pe_percentile"], merged["delivery_percentile"])
     merged["delivery_flow"] = delivery_flow_strength(merged["delivery_percentile"])
     merged["vadm"] = compute_vadm(merged["pe_percentile"], merged["delivery_flow"])
-    n_bad_delivery = deliv_df.attrs.get("n_impossible_delivery_pct_rows_removed", 0)
+    n_bad_delivery = eod2_df.attrs.get("n_impossible_delivery_pct_rows_removed", 0)
 
     # VADM IS the operational signal now (quadrant is the visual 4-state view
     # of the same underlying PE-percentile + delivery-flow combination)
