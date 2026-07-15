@@ -159,3 +159,21 @@ def generate_quadrant_ablation_signals(df: pd.DataFrame, cheap_pctile: float = 0
     out["sell_delivery_only"] = (out["delivery_percentile"] <= delivery_pctile_midpoint).fillna(False)
     out["sell_combined"] = out["heavy_selling"]
     return out
+
+
+def signal_onsets(bool_series: pd.Series) -> pd.Series:
+    """
+    True only on the FIRST day of each consecutive run of True values.
+
+    WHY THIS MATTERS: confirmed on real HDFC Bank data that heavy_selling
+    (75 raw signal-days) was really only 21 distinct episodes -- one episode
+    ran 29 CONSECUTIVE days. Evaluating every day of a persistent regime as
+    an independent observation in a t-test violates the independence
+    assumption and inflates apparent statistical significance (forward
+    returns on consecutive days are highly overlapping/correlated, not
+    independent draws). Use this for statistical evaluation; keep the full
+    day-level signal for chart display, where showing every day within an
+    episode is still the correct visual.
+    """
+    s = bool_series.fillna(False)
+    return s & ~s.shift(1, fill_value=False)
