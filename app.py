@@ -206,8 +206,8 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
     # of the same underlying PE-percentile + delivery-flow combination)
     merged = generate_quadrant_signals(
         merged,
-        vadm_buy_threshold=params["vadm_buy_threshold"],
-        vadm_sell_threshold=params["vadm_sell_threshold"],
+        vadm_buy_pctile=params["vadm_buy_pctile"],
+        vadm_sell_pctile=params["vadm_sell_pctile"],
     )
     merged = generate_quadrant_ablation_signals(
         merged,
@@ -522,8 +522,10 @@ def main():
             expensive_pctile = st.slider("EXPENSIVE PE %", 0.50, 0.95, 0.80, 0.05)
 
             st.markdown("<span style='color:#D4A017'>VADM SIGNAL (operational trigger)</span>", unsafe_allow_html=True)
-            vadm_buy_threshold = st.slider("VADM BUY THRESHOLD", 0.05, 0.80, 0.15, 0.05)
-            vadm_sell_threshold = st.slider("VADM SELL THRESHOLD", 0.05, 0.80, 0.15, 0.05)
+            vadm_buy_pctile = st.slider("VADM BUY -- TOP % OF OWN HISTORY", 0.70, 0.99, 0.90, 0.01,
+                                         help="Heavy buying = VADM in the top X% of this stock's own VADM history. NOT a fixed number -- a fixed threshold was tested and found to fire on 55%+ of days, which isn't 'heavy' at all.")
+            vadm_sell_pctile = st.slider("VADM SELL -- BOTTOM % OF OWN HISTORY", 0.01, 0.30, 0.10, 0.01,
+                                          help="Heavy selling = VADM in the bottom X% of its own history.")
             h3_holding_period = st.selectbox("H3 REGRESSION HOLDING (DAYS)", [21, 63, 126, 252], index=1)
 
             st.markdown("<span style='color:#D4A017'>ADVANCED ENGINE</span>", unsafe_allow_html=True)
@@ -546,7 +548,7 @@ def main():
 
     params = dict(
         cheap_pctile=cheap_pctile, expensive_pctile=expensive_pctile,
-        vadm_buy_threshold=vadm_buy_threshold, vadm_sell_threshold=vadm_sell_threshold,
+        vadm_buy_pctile=vadm_buy_pctile, vadm_sell_pctile=vadm_sell_pctile,
         h3_holding_period=h3_holding_period,
         volume_window=volume_window,
         filing_lag_days=filing_lag_days, pe_min_periods=pe_min_periods,
