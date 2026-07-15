@@ -164,10 +164,8 @@ def fetch_eod2_delivery_data(nse_symbol):
 
 def _process_eod2_dataframe(df):
     """
-    Shared processing for EOD2 data (local or fetched): computes delivery%
-    from DLV_QTY / Volume, and cleans the impossible-values data-quality
-    issue confirmed on real HDFC Bank data (~0.1% of rows had delivery% > 100,
-    which is physically impossible -- treated as data errors, set to NaN).
+    Shared processing for EOD2 data (local or fetched).
+    Now keeps Open, High, Low, Close for Candlestick charting.
     """
     df["delivery_pct"] = df["DLV_QTY"] / df["Volume"] * 100
     bad = df["delivery_pct"] > 100
@@ -175,8 +173,9 @@ def _process_eod2_dataframe(df):
     if n_bad:
         df.loc[bad, "delivery_pct"] = None
 
-    out = df[["Close", "Volume", "DLV_QTY", "delivery_pct"]].rename(
-        columns={"Close": "price", "Volume": "volume"}
+    # ADDED: Open, High, Low columns for Candlestick charts
+    out = df[["Open", "High", "Low", "Close", "Volume", "DLV_QTY", "delivery_pct"]].rename(
+        columns={"Close": "price", "Volume": "volume", "Open": "open", "High": "high", "Low": "low"}
     )
     out = out.dropna(subset=["price"])
     out.attrs["n_impossible_delivery_pct_rows_removed"] = n_bad
