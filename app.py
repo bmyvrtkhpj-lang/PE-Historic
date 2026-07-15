@@ -328,7 +328,7 @@ def render_stock_chart(ticker, merged):
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    def render_ablation_table(ablation_results, side):
+def render_ablation_table(ablation_results, side):
     labels = {
         f"{side}_pe_only": "PE ONLY (H1)",
         f"{side}_delivery_only": "DELIVERY ONLY (H2)",
