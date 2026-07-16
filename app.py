@@ -24,68 +24,86 @@ from backtest import run_backtest, run_ablation_backtest, test_h3_interaction
 
 
 APP_NAME = "VADM TERMINAL"
+# --- TRADINGVIEW LIGHT THEME COLOR PALETTE ---
+BG = "#FFFFFF"          # Pure White background
+PANEL_BG = "#FFFFFF"    # White panels
+BORDER = "#E0E3EB"      # Subtle light grey borders
+GRID = "#F0F3FA"        # Very faint gridlines
+TEXT = "#131722"        # Dark grey/black for primary text
+TEXT_MUTED = "#787B86"  # Medium grey for secondary text
+ACCENT = "#2962FF"      # TradingView Primary Blue
+GREEN = "#089981"       # TradingView Positive Green
+RED = "#F23645"         # TradingView Negative Red
+CAUTION = "#FF9800"     # Warning Orange
 
-# --- CYBER-INSTITUTIONAL COLOR PALETTE ---
-BG = "#090C10"          # Deep Matte Midnight
-PANEL_BG = "#11151C"    # Slightly lighter glass panel
-BORDER = "#242B38"      # Subtle thin borders
-GRID = "#1C212B"        # Invisible-ish gridlines
-TEXT = "#E6EDF3"        # Crisp white/ash text
-TEXT_MUTED = "#8B949E"  # Muted secondary text
-ACCENT = "#D4A017"      # Champagne Gold
-GREEN = "#3FB950"       # Institutional Green
-RED = "#F85149"         # Crimson Red
-CAUTION = "#D29922"     # Warning Yellow
-MUTED_GRAY = "#6E7681"
+st.set_page_config(page_title=f"{APP_NAME}", layout="wide", page_icon="📈")
 
-st.set_page_config(page_title=f"{APP_NAME}", layout="wide", page_icon="⚡")
-
-# --- PREMIUM CSS INJECTION ---
+# --- TRADINGVIEW 100% REPLICA CSS INJECTION ---
 st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+    /* Clean Sans-Serif font just like TradingView */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
     p, div, h1, h2, h3, h4, h5, h6, label, input, button, li, th, td {{
-        font-family: 'IBM Plex Mono', monospace !important;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif !important;
     }}
+    
     .stApp {{ background-color: {BG}; color: {TEXT}; }}
     #MainMenu, footer {{ visibility: hidden; }}
     .block-container {{ padding: 1.5rem 2rem !important; max-width: 100% !important; }}
     
-    /* Sleek metric panels */
+    /* Sleek metric panels with Rounded Corners (TradingView style) */
     .metric-card {{
         background-color: {PANEL_BG};
         border: 1px solid {BORDER};
-        border-top: 2px solid {ACCENT};
-        border-radius: 4px;
-        padding: 15px;
+        border-radius: 8px; /* Smooth rounded corners */
+        padding: 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); /* Very subtle shadow */
     }}
-    .metric-title {{ color: {ACCENT}; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.05em; }}
-    .metric-value {{ color: {TEXT}; font-size: 1.6rem; font-weight: 700; margin-top: 5px; }}
-    .metric-sub {{ color: {TEXT_MUTED}; font-size: 0.75rem; margin-top: -2px; }}
+    .metric-title {{ color: {TEXT_MUTED}; font-size: 0.85rem; font-weight: 500; }}
+    .metric-value {{ color: {TEXT}; font-size: 1.7rem; font-weight: 600; margin-top: 4px; }}
+    .metric-sub {{ color: {TEXT_MUTED}; font-size: 0.75rem; margin-top: 2px; }}
 
     /* Borderless & Styled DataFrames */
     .stDataFrame {{ border: none !important; }}
     [data-testid="stTable"] {{ border: none !important; background-color: transparent !important; }}
-    th {{ background-color: {PANEL_BG} !important; color: {TEXT_MUTED} !important; font-size: 0.75rem !important; border-bottom: 1px solid {BORDER} !important; }}
-    td {{ border-bottom: 1px solid rgba(36, 43, 56, 0.4) !important; font-size: 0.85rem !important; }}
+    th {{ 
+        background-color: {BG} !important; 
+        color: {TEXT_MUTED} !important; 
+        font-size: 0.8rem !important; 
+        font-weight: 500 !important;
+        border-bottom: 1px solid {BORDER} !important; 
+    }}
+    td {{ 
+        border-bottom: 1px solid {GRID} !important; 
+        font-size: 0.85rem !important; 
+        color: {TEXT} !important;
+    }}
 
     /* Pill-style Checkboxes for Chart Controls */
     div[data-testid="stCheckbox"] {{
-        background-color: {PANEL_BG};
+        background-color: {BG};
         border: 1px solid {BORDER};
-        padding: 6px 12px;
-        border-radius: 20px;
+        padding: 6px 14px;
+        border-radius: 16px; /* Pill shape */
         transition: all 0.2s ease;
+        color: {TEXT};
+        font-size: 0.85rem;
     }}
     div[data-testid="stCheckbox"]:hover {{ border-color: {ACCENT}; }}
     
-    /* Buttons */
+    /* TradingView Blue Primary Button */
     div.stButton > button[kind="primary"] {{
-        background-color: {PANEL_BG}; color: {GREEN}; border: 1px solid {GREEN};
-        border-radius: 3px; font-weight: 600; letter-spacing: 0.05em; height: 100%;
-        padding: 18px 0px; transition: 0.2s ease;
+        background-color: {ACCENT}; 
+        color: #FFFFFF; 
+        border: none;
+        border-radius: 8px; /* Rounded corners */
+        font-weight: 600; 
+        height: 100%;
+        padding: 14px 0px; 
+        transition: 0.2s ease;
     }}
-    div.stButton > button[kind="primary"]:hover {{ background-color: {GREEN}; color: {BG}; }}
+    div.stButton > button[kind="primary"]:hover {{ background-color: #1E53E5; color: #FFFFFF; }}
     
     ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
     ::-webkit-scrollbar-track {{ background: {BG}; }}
