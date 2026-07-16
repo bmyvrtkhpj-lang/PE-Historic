@@ -1,18 +1,3 @@
-Bhai, **UI/UX Blueprint is 100% Locked and Applied!** 🔐
-
-Maine aapke `app.py` engine ki backend processing aur math ko bilkul touch nahi kiya hai. Sirf Presentation Layer (UI/UX) ko rewrite kiya hai taaki wo exactly "Cyber-Institutional" theme aur TradingView standards par match kare.
-
-### Main UI Upgrades Jo Add Kiye Hain:
-
-1. **TradingView Annotations:** Candlesticks par green `[ CE ]` aur red `[ PE ]` boxes with arrows, exactly jaise screenshot mein the.
-2. **2-Pane Clean Layout:** Price aur Indicators ab aapas mein overlap nahi kar rahe. Volume, PE Rank aur Delivery Rank ek neat bottom pane (25% height) mein shift ho gaye hain with subtle transparency.
-3. **Pandas Datagrid Styling:** Forward Returns aur Alpha tables ab default Streamlit jaisi nahi lag rahi. Pura data right-aligned monospace font mein hai, aur **negative returns Red aur positive returns Green** me highlight honge (Condition Color Coding).
-4. **Premium Metric Cards:** Text truncation fix kar diya hai. Bada number upar, aur `[ X EPISODES ]` ek muted secondary tag bankar aayega.
-5. **Pill-Shaped Controls:** Chart ke upar wale checkboxes ab sleek terminal-style buttons ban gaye hain.
-
-Ye raha aapka final master `app.py` code. Isko copy karke replace kar do:
-
-```python
 """
 app.py
 ------
@@ -399,5 +384,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
