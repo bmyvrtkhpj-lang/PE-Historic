@@ -180,7 +180,7 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         return None, f"Price/delivery data unavailable for {nse_symbol}: {eod2_err}"
 
     price_start = params["price_start"]
-    price_df = eod2_df.loc[eod2_df.index >= price_start, ["price", "volume"]]
+    price_df = eod2_df.loc[eod2_df.index >= price_start, ["price", "volume", "open", "high", "low"]]
     if price_df.empty:
         return None, f"No price data for {nse_symbol} from {price_start} onward."
 
@@ -188,7 +188,7 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
     exclusions = parse_exclusions(exclusions_text)
     pe_df = apply_corporate_action_exclusions(pe_df, exclusions)
 
-    merged = pe_df.join(price_df[["volume"]], how="left")
+    merged = pe_df.join(price_df[["volume", "open", "high", "low"]], how="left")
     merged = add_all_technical_indicators(
         merged,
         volume_window=params["volume_window"],
@@ -251,83 +251,174 @@ def run_single_stock(ticker, xlsx_file, exclusions_text, params):
         "n_buy_raw_days": n_buy_raw_days, "n_sell_raw_days": n_sell_raw_days,
     }, None
 
-def render_stock_chart(ticker, merged):
-    if go is None: return
-    fig = go.Figure()
 
-    # 1. PROFESSIONAL CANDLESTICK CHART
-    if "open" in merged.columns:
-        fig.add_trace(go.Candlestick(
-            x=merged.index,
-            open=merged["open"], high=merged["high"],
-            low=merged["low"], close=merged["price"],
-            name="OHLC",
-            increasing_line_color="#3FB950", decreasing_line_color="#F85149",
-            increasing_fillcolor="#3FB950", decreasing_fillcolor="#F85149"
-        ))
+def render_advanced_chart(ticker, merged, show_pe=True, show_delivery=True,
+                           show_rsi=False, show_obv=False, show_momentum=False,
+                           show_volume_spikes=False, onset_only_markers=False):
+    """
+    TradingView-style chart: daily OHLC candlesticks, volume panel, optional
+    RSI/OBV/Momentum panels (toggled), PE%/Delivery% overlay lines (toggled),
+    heavy buy/sell markers, and Plotly's native drawing tools enabled
+    (trend lines, rectangles, etc. via the chart's toolbar).
+    """
+    if go is None:
+        return
+    from plotly.subplots import make_subplots
+
+    plot_df = merged.dropna(subset=["price"]).copy()
+    if plot_df.empty:
+        st.info("[SYSTEM] No price data to chart yet.")
+        return
+    has_ohlc = all(c in plot_df.columns and plot_df[c].notna().any() for c in ["open", "high", "low"])
+
+    extra_rows = []
+    if show_rsi:
+        extra_rows.append("RSI")
+    if show_obv:
+        extra_rows.append("OBV")
+    if show_momentum:
+        extra_rows.append("MOMENTUM")
+
+    n_rows = 2 + len(extra_rows)
+    if extra_rows:
+        main_h, vol_h = 0.5, 0.16
+        rest_h = (1 - main_h - vol_h) / len(extra_rows)
+        row_heights = [main_h, vol_h] + [rest_h] * len(extra_rows)
     else:
-        fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="PRICE", line=dict(color="#E6EDF3")))
+        row_heights = [0.75, 0.25]
 
-    # 2. EXACT ENTRY & EXIT LOGIC (Using Sir's signal_onsets to filter noise)
-    from vadm import signal_onsets
-    
-    # Use the actual VADM signals, filtered for the FIRST day of the episode
-    entry_long = signal_onsets(merged["heavy_buying"])
-    entry_short = signal_onsets(merged["heavy_selling"])
-    
-    # Exit Long: When stock drops into Value Trap or Reversal regimes
-    is_bad_zone = merged["quadrant"].isin(["Value Trap Warning", "Reversal/De-rating"])
-    exit_long = signal_onsets(is_bad_zone)
+    specs = [[{"secondary_y": True}]] + [[{"secondary_y": False}]] * (n_rows - 1)
+    fig = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                         row_heights=row_heights, specs=specs)
 
-    df_entry_long = merged[entry_long]
-    df_entry_short = merged[entry_short]
-    df_exit_long = merged[exit_long]
+    # --- Row 1: Candlestick (or line fallback) ---
+    if has_ohlc:
+        fig.add_trace(go.Candlestick(
+            x=plot_df.index, open=plot_df["open"], high=plot_df["high"],
+            low=plot_df["low"], close=plot_df["price"],
+            increasing_line_color=GREEN, decreasing_line_color=RED,
+            increasing_fillcolor=GREEN, decreasing_fillcolor=RED,
+            name="PRICE",
+        ), row=1, col=1, secondary_y=False)
+        low_ref, high_ref = plot_df["low"], plot_df["high"]
+    else:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["price"], name="PRICE",
+                                  line=dict(width=1.3, color=TEXT)), row=1, col=1, secondary_y=False)
+        low_ref, high_ref = plot_df["price"], plot_df["price"]
 
-    # 3. PLOT MARKERS (Using HOVERTEXT to keep the chart clean)
-    # Entry Long (Below Candle)
-    if not df_entry_long.empty:
-        y_pos = df_entry_long["low"] * 0.95 if "low" in df_entry_long else df_entry_long["price"] * 0.95
-        fig.add_trace(go.Scatter(
-            x=df_entry_long.index, y=y_pos, mode="markers", name="ENTRY LONG",
-            hovertext="⬆ ENTRY LONG (Value Confirmation)", hoverinfo="text+x",
-            marker=dict(color="#3FB950", size=10, symbol="triangle-up", line=dict(color="#0B0E14", width=1))
-        ))
+    # --- Heavy buy/sell markers (onset-only option, per your question about back-to-back clustering) ---
+    buy_mask = signal_onsets(merged["heavy_buying"]) if onset_only_markers else merged["heavy_buying"]
+    sell_mask = signal_onsets(merged["heavy_selling"]) if onset_only_markers else merged["heavy_selling"]
+    buy_mask = buy_mask.reindex(plot_df.index, fill_value=False)
+    sell_mask = sell_mask.reindex(plot_df.index, fill_value=False)
+    buys, sells = plot_df[buy_mask], plot_df[sell_mask]
 
-    # Entry Short (Above Candle)
-    if not df_entry_short.empty:
-        y_pos = df_entry_short["high"] * 1.05 if "high" in df_entry_short else df_entry_short["price"] * 1.05
-        fig.add_trace(go.Scatter(
-            x=df_entry_short.index, y=y_pos, mode="markers", name="ENTRY SHORT",
-            hovertext="⬇ ENTRY SHORT (Reversal/De-rating)", hoverinfo="text+x",
-            marker=dict(color="#F85149", size=10, symbol="triangle-down", line=dict(color="#0B0E14", width=1))
-        ))
-        
-    # Exit Long (Above Candle)
-    if not df_exit_long.empty:
-        y_pos = df_exit_long["high"] * 1.05 if "high" in df_exit_long else df_exit_long["price"] * 1.05
-        fig.add_trace(go.Scatter(
-            x=df_exit_long.index, y=y_pos, mode="markers", name="EXIT LONG",
-            hovertext="✖ EXIT (Trap/Reversal Zone)", hoverinfo="text+x",
-            marker=dict(color="#D4A017", size=9, symbol="x", line=dict(color="#0B0E14", width=1))
-        ))
+    fig.add_trace(go.Scatter(x=buys.index, y=low_ref[buy_mask] * 0.985, mode="markers", name="HEAVY BUY",
+                              marker=dict(color=GREEN, size=8, symbol="triangle-up", line=dict(color=BG, width=1))),
+                  row=1, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=sells.index, y=high_ref[sell_mask] * 1.015, mode="markers", name="HEAVY SELL",
+                              marker=dict(color=RED, size=8, symbol="triangle-down", line=dict(color=BG, width=1))),
+                  row=1, col=1, secondary_y=False)
 
-    # Remove Range Slider (Makes chart cleaner)
-    fig.update_layout(xaxis_rangeslider_visible=False)
+    # --- Optional overlay: PE% / Delivery% (toggleable) ---
+    if show_pe and "pe_percentile" in plot_df.columns:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["pe_percentile"] * 100, name="PE %RANK",
+                                  line=dict(width=1, dash="dot", color=ACCENT)), row=1, col=1, secondary_y=True)
+    if show_delivery and "delivery_percentile" in plot_df.columns:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["delivery_percentile"] * 100, name="DELIVERY %RANK",
+                                  line=dict(width=1, dash="dot", color=CAUTION)), row=1, col=1, secondary_y=True)
+
+    # --- Row 2: Volume (colored by up/down day) ---
+    if has_ohlc:
+        vol_colors = [GREEN if c >= o else RED for c, o in zip(plot_df["price"], plot_df["open"])]
+    else:
+        prev = plot_df["price"].shift(1).fillna(plot_df["price"])
+        vol_colors = [GREEN if c >= p else RED for c, p in zip(plot_df["price"], prev)]
+    fig.add_trace(go.Bar(x=plot_df.index, y=plot_df["volume"], marker_color=vol_colors, name="VOLUME",
+                          opacity=0.85), row=2, col=1)
+    if show_volume_spikes and "volume_zscore" in plot_df.columns:
+        spikes = plot_df[plot_df["volume_zscore"] > 2]
+        fig.add_trace(go.Scatter(x=spikes.index, y=spikes["volume"], mode="markers", name="VOL SPIKE (Z>2)",
+                                  marker=dict(color=ACCENT, size=6, symbol="star")), row=2, col=1)
+
+    # --- Optional indicator rows ---
+    cur_row = 3
+    if show_rsi and "rsi" in plot_df.columns:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["rsi"], name="RSI",
+                                  line=dict(color=ACCENT, width=1.2)), row=cur_row, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color=RED, row=cur_row, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color=GREEN, row=cur_row, col=1)
+        fig.update_yaxes(title_text="RSI", range=[0, 100], row=cur_row, col=1)
+        cur_row += 1
+    if show_obv and "obv" in plot_df.columns:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["obv"], name="OBV",
+                                  line=dict(color=TEXT_MUTED, width=1.2)), row=cur_row, col=1)
+        fig.update_yaxes(title_text="OBV", row=cur_row, col=1)
+        cur_row += 1
+    if show_momentum and "momentum" in plot_df.columns:
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["momentum"] * 100, name="MOMENTUM %",
+                                  line=dict(color=CAUTION, width=1.2)), row=cur_row, col=1)
+        fig.add_hline(y=0, line_dash="dot", line_color=MUTED_GRAY, row=cur_row, col=1)
+        fig.update_yaxes(title_text="MOM %", row=cur_row, col=1)
+        cur_row += 1
 
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor='#0B0E14',
-        plot_bgcolor='#0B0E14',
-        title=dict(text=f"> {ticker} : CANDLESTICK SIGNAL ANALYSIS", font=dict(size=14, color="#D4A017", family="IBM Plex Mono, monospace")),
-        height=650,
-        yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor="#1C212B", zeroline=False, tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace")),
-        xaxis=dict(tickfont=dict(color="#E6EDF3", family="IBM Plex Mono, monospace"), gridcolor="#1C212B"),
-        legend=dict(orientation="h", y=1.05, x=0, bgcolor='#0B0E14', font=dict(size=11, color="#E6EDF3", family="IBM Plex Mono, monospace")),
+        paper_bgcolor=BG, plot_bgcolor=BG,
+        title=dict(text=f"> {ticker} : SIGNAL ANALYSIS", font=dict(size=14, color=ACCENT, family="IBM Plex Mono, monospace")),
+        height=560 + 150 * len(extra_rows),
+        margin=dict(l=0, r=0, t=40, b=0),
+        legend=dict(orientation="h", y=1.04, x=0, bgcolor=BG, font=dict(size=10, color=TEXT, family="IBM Plex Mono, monospace")),
+        hovermode="x unified",
+        xaxis_rangeslider_visible=False,
+        dragmode="pan",
+    )
+    fig.update_xaxes(gridcolor=GRID, tickfont=dict(color=TEXT, family="IBM Plex Mono, monospace"))
+    fig.update_yaxes(gridcolor=GRID, tickfont=dict(color=TEXT, family="IBM Plex Mono, monospace"))
+    fig.update_yaxes(title_text="PRICE (INR)", row=1, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="PERCENTILE", range=[0, 100], showgrid=False, row=1, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="VOLUME", row=2, col=1)
+
+    st.plotly_chart(fig, width='stretch', config={
+        "scrollZoom": True,
+        "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"],
+        "displaylogo": False,
+    })
+
+
+def render_stock_chart(ticker, merged):
+    """Kept for compatibility -- simple line version. render_advanced_chart is the main chart now."""
+    if go is None:
+        return
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=merged.index, y=merged["price"], name="PRICE", yaxis="y",
+                             line=dict(width=1.5, color=TEXT)))
+    buys = merged[merged["heavy_buying"]]
+    sells = merged[merged["heavy_selling"]]
+    fig.add_trace(go.Scatter(x=buys.index, y=buys["price"], mode="markers", name="HEAVY BUY",
+                              marker=dict(color=GREEN, size=8, symbol="triangle-up",
+                                          line=dict(color=BG, width=1))))
+    fig.add_trace(go.Scatter(x=sells.index, y=sells["price"], mode="markers", name="HEAVY SELL",
+                              marker=dict(color=RED, size=8, symbol="triangle-down",
+                                          line=dict(color=BG, width=1))))
+    fig.add_trace(go.Scatter(x=merged.index, y=merged["pe_percentile"] * 100, name="PE %RANK",
+                              yaxis="y2", line=dict(width=1, dash="dot", color=ACCENT)))
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=BG,
+        plot_bgcolor=BG,
+        title=dict(text=f"> {ticker} : SIGNAL ANALYSIS", font=dict(size=14, color=ACCENT, family="IBM Plex Mono, monospace")),
+        height=500,
+        yaxis=dict(title="PRICE (INR)", showgrid=True, gridcolor=GRID, zeroline=False, tickfont=dict(color=TEXT, family="IBM Plex Mono, monospace")),
+        yaxis2=dict(title="PE PERCENTILE", overlaying="y", side="right", range=[0, 100], showgrid=False, tickfont=dict(color=ACCENT, family="IBM Plex Mono, monospace")),
+        xaxis=dict(tickfont=dict(color=TEXT, family="IBM Plex Mono, monospace"), gridcolor=GRID),
+        legend=dict(orientation="h", y=1.05, x=0, bgcolor=BG, font=dict(size=11, color=TEXT, family="IBM Plex Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
         hovermode="x unified"
     )
-    st.plotly_chart(fig, use_container_width=True)
-    
+    st.plotly_chart(fig, width='stretch')
+
+
 def render_ablation_table(ablation_results, side):
     labels = {
         f"{side}_pe_only": "PE ONLY (H1)",
@@ -356,7 +447,7 @@ def render_ablation_table(ablation_results, side):
             "P-VAL": pval_str,
         })
     if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 
 QUADRANT_COLORS = {
@@ -413,7 +504,7 @@ def render_quadrant_chart(merged, quadrant_col="quadrant"):
         legend=dict(orientation="h", y=-0.15, font=dict(size=10, color="#E6EDF3", family="IBM Plex Mono, monospace")),
         margin=dict(l=0, r=0, t=40, b=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     dist = plot_df[quadrant_col].value_counts()
     cols = st.columns(4)
@@ -480,7 +571,7 @@ def render_h3_results(h3_model, h3_err, holding_period):
             "P-VALUE": "<0.001" if p < 0.001 else f"{p:.4f}",
             "SIGNIFICANT (5%)": "YES" if p < 0.05 else "no",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     interaction_p = pvalues.get("interaction", None)
     n_obs = int(h3_model.nobs)
@@ -550,7 +641,7 @@ def check_access() -> bool:
     _, mid, _ = st.columns([1, 1, 1])
     with mid:
         code = st.text_input("ACCESS CODE", type="password", key="access_code_input", label_visibility="collapsed", placeholder="ACCESS CODE")
-        submit = st.button("AUTHENTICATE", use_container_width=True)
+        submit = st.button("AUTHENTICATE", width='stretch')
 
         if submit:
             if code == ACCESS_CODE:
@@ -586,7 +677,7 @@ def main():
 
     with c3:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        with st.popover("[ STRAT PARAMS ]", use_container_width=True):
+        with st.popover("[ STRAT PARAMS ]", width='stretch'):
             st.markdown("<span style='color:#D4A017'>VALUATION BOUNDS</span>", unsafe_allow_html=True)
             cheap_pctile = st.slider("CHEAP PE %", 0.05, 0.50, 0.20, 0.05)
             expensive_pctile = st.slider("EXPENSIVE PE %", 0.50, 0.95, 0.80, 0.05)
@@ -612,7 +703,7 @@ def main():
 
     with c4:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        run_btn = st.button("< EXECUTE >", type="primary", use_container_width=True)
+        run_btn = st.button("< EXECUTE >", type="primary", width='stretch')
 
     holding_periods = tuple(int(x.strip()) for x in holding_periods_text.split(",") if x.strip())
 
@@ -651,16 +742,32 @@ def main():
         st.caption("Stats/backtest below use EPISODES (independent onsets) -- a persistent multi-day regime is one episode, not one observation per day. Chart below still marks every day.")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        render_stock_chart(ticker, merged)
+
+        st.markdown("<span style='color:#D4A017; font-family:monospace; font-size:0.8rem;'>CHART CONTROLS</span>", unsafe_allow_html=True)
+        t1, t2, t3, t4, t5, t6, t7 = st.columns(7)
+        show_pe = t1.checkbox("PE LINE", value=True)
+        show_delivery = t2.checkbox("DELIV LINE", value=True)
+        show_rsi = t3.checkbox("RSI", value=False)
+        show_obv = t4.checkbox("OBV", value=False)
+        show_momentum = t5.checkbox("MOMENTUM", value=False)
+        show_vol_spikes = t6.checkbox("VOL SPIKES", value=False)
+        onset_only = t7.checkbox("ONSET ONLY", value=False, help="Show only the first day of each signal episode, not every day of a persistent regime.")
+
+        render_advanced_chart(
+            ticker, merged,
+            show_pe=show_pe, show_delivery=show_delivery,
+            show_rsi=show_rsi, show_obv=show_obv, show_momentum=show_momentum,
+            show_volume_spikes=show_vol_spikes, onset_only_markers=onset_only,
+        )
         st.markdown("<br>", unsafe_allow_html=True)
 
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("<span style='color:#3FB950; font-family:monospace; border-bottom: 1px solid #3FB950;'>[ BUY ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
-            st.dataframe(format_terminal_df(result["results"]["buy_signal_eval"]), use_container_width=True, hide_index=True)
+            st.dataframe(format_terminal_df(result["results"]["buy_signal_eval"]), width='stretch', hide_index=True)
         with c2:
             st.markdown("<span style='color:#F85149; font-family:monospace; border-bottom: 1px solid #F85149;'>[ SELL ZONE ] FORWARD RETURNS</span>", unsafe_allow_html=True)
-            st.dataframe(format_terminal_df(result["results"]["sell_signal_eval"]), use_container_width=True, hide_index=True)
+            st.dataframe(format_terminal_df(result["results"]["sell_signal_eval"]), width='stretch', hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
